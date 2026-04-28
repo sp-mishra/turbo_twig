@@ -32,6 +32,7 @@ namespace litegraph {
         IncompatibleGraphs,
         NoPath
     };
+
     // ----------- Breadth-First Search (BFS) -----------
     template<LiteGraphModel GraphT, typename Fn>
     void bfs(const GraphT &g, NodeId start, Fn &&visit) {
@@ -1772,12 +1773,12 @@ namespace litegraph {
 
         return std::numeric_limits<double>::infinity();
     }
+
     // C++23 Parallel Graph Algorithms
     namespace parallel {
-
         // Parallel BFS with execution policy
         template<LiteGraphModel GraphT, typename ExecPolicy, typename Fn>
-        void parallel_bfs(ExecPolicy&& policy, const GraphT &g, NodeId start, Fn &&visit) {
+        void parallel_bfs(ExecPolicy &&policy, const GraphT &g, NodeId start, Fn &&visit) {
             std::unordered_set<std::size_t> visited;
             std::queue<NodeId> current_level, next_level;
             current_level.push(start);
@@ -1793,21 +1794,21 @@ namespace litegraph {
 
                 // Parallel visit of current level
                 std::for_each(policy, level_nodes.begin(), level_nodes.end(),
-                    [&](NodeId u) { visit(u, g.node_data(u)); });
+                              [&](NodeId u) { visit(u, g.node_data(u)); });
 
                 // Collect next level neighbors
-                std::vector<std::vector<NodeId>> neighbor_lists(level_nodes.size());
+                std::vector<std::vector<NodeId> > neighbor_lists(level_nodes.size());
                 std::for_each(policy, level_nodes.begin(), level_nodes.end(),
-                    [&](NodeId u) {
-                        auto idx = &u - &level_nodes[0];
-                        for (auto v : g.neighbors(u)) {
-                            neighbor_lists[idx].push_back(v);
-                        }
-                    });
+                              [&](NodeId u) {
+                                  auto idx = &u - &level_nodes[0];
+                                  for (auto v: g.neighbors(u)) {
+                                      neighbor_lists[idx].push_back(v);
+                                  }
+                              });
 
                 // Add unvisited neighbors to next level
-                for (const auto& neighbors : neighbor_lists) {
-                    for (NodeId v : neighbors) {
+                for (const auto &neighbors: neighbor_lists) {
+                    for (NodeId v: neighbors) {
                         if (visited.insert(v.value).second) {
                             next_level.push(v);
                         }
@@ -1820,12 +1821,11 @@ namespace litegraph {
 
         // Parallel shortest path computation using std::expected for error handling
         template<LiteGraphModel GraphT, typename ExecPolicy>
-        requires std::is_execution_policy_v<std::remove_cvref_t<ExecPolicy>>
-        std::expected<std::pair<std::vector<double>, std::vector<std::optional<NodeId>>>, GraphError>
-        parallel_dijkstra(ExecPolicy&& policy, const GraphT &g, NodeId source,
-                          std::function<double(const typename GraphT::edge_type &)> weight_fn = 
-                          [](const auto &e) { return static_cast<double>(e); }) {
-            
+            requires std::is_execution_policy_v<std::remove_cvref_t<ExecPolicy> >
+        std::expected<std::pair<std::vector<double>, std::vector<std::optional<NodeId> > >, GraphError>
+        parallel_dijkstra(ExecPolicy &&policy, const GraphT &g, NodeId source,
+                          std::function<double(const typename GraphT::edge_type &)> weight_fn =
+                                  [](const auto &e) { return static_cast<double>(e); }) {
             if (!g.valid_node(source)) {
                 return std::unexpected(GraphError::InvalidNode);
             }
@@ -1834,7 +1834,7 @@ namespace litegraph {
             constexpr DistT INF = std::numeric_limits<DistT>::infinity();
 
             std::vector<DistT> dist(g.node_count(), INF);
-            std::vector<std::optional<NodeId>> pred(g.node_count());
+            std::vector<std::optional<NodeId> > pred(g.node_count());
             std::vector<bool> processed(g.node_count(), false);
 
             dist[source.value] = 0;
@@ -1847,16 +1847,17 @@ namespace litegraph {
 
                 auto node_range = std::views::iota(std::size_t{0}, g.node_count());
                 std::for_each(policy, node_range.begin(), node_range.end(),
-                    [&](std::size_t i) {
-                        if (!processed[i] && dist[i] < min_dist.load()) {
-                            DistT expected = min_dist.load();
-                            while (dist[i] < expected && 
-                                   !min_dist.compare_exchange_weak(expected, dist[i])) {}
-                            if (dist[i] == min_dist.load()) {
-                                min_node.store(i);
-                            }
-                        }
-                    });
+                              [&](std::size_t i) {
+                                  if (!processed[i] && dist[i] < min_dist.load()) {
+                                      DistT expected = min_dist.load();
+                                      while (dist[i] < expected &&
+                                             !min_dist.compare_exchange_weak(expected, dist[i])) {
+                                      }
+                                      if (dist[i] == min_dist.load()) {
+                                          min_node.store(i);
+                                      }
+                                  }
+                              });
 
                 if (min_node.load() == g.node_count()) break;
 
@@ -1866,23 +1867,23 @@ namespace litegraph {
                 // Parallel edge relaxation
                 auto out_edges = g.out_edges(u);
                 std::for_each(policy, out_edges.begin(), out_edges.end(),
-                    [&](EdgeId eid) {
-                        const auto &edge = g.get_edge(eid);
-                        NodeId v = edge.to;
-                        auto w = weight_fn(edge.data);
-                        
-                        DistT new_dist = dist[u.value] + w;
-                        DistT expected = dist[v.value];
-                        
-                        while (new_dist < expected && 
-                               !std::atomic_ref(dist[v.value]).compare_exchange_weak(expected, new_dist)) {
-                            expected = dist[v.value];
-                        }
-                        
-                        if (new_dist == dist[v.value]) {
-                            pred[v.value] = u;
-                        }
-                    });
+                              [&](EdgeId eid) {
+                                  const auto &edge = g.get_edge(eid);
+                                  NodeId v = edge.to;
+                                  auto w = weight_fn(edge.data);
+
+                                  DistT new_dist = dist[u.value] + w;
+                                  DistT expected = dist[v.value];
+
+                                  while (new_dist < expected &&
+                                         !std::atomic_ref(dist[v.value]).compare_exchange_weak(expected, new_dist)) {
+                                      expected = dist[v.value];
+                                  }
+
+                                  if (new_dist == dist[v.value]) {
+                                      pred[v.value] = u;
+                                  }
+                              });
             }
 
             return std::make_pair(std::move(dist), std::move(pred));
@@ -1890,15 +1891,15 @@ namespace litegraph {
 
         // Parallel graph coloring with improved load balancing
         template<LiteGraphModel GraphT, typename ExecPolicy>
-        requires std::is_execution_policy_v<std::remove_cvref_t<ExecPolicy>>
-        std::vector<std::optional<int>> parallel_greedy_coloring(ExecPolicy&& policy, const GraphT &g) {
+            requires std::is_execution_policy_v<std::remove_cvref_t<ExecPolicy> >
+        std::vector<std::optional<int> > parallel_greedy_coloring(ExecPolicy &&policy, const GraphT &g) {
             const size_t node_cap = g.node_capacity();
-            std::vector<std::optional<int>> colors(node_cap, std::nullopt);
-            std::vector<std::atomic<int>> atomic_colors(node_cap);
-            
+            std::vector<std::optional<int> > colors(node_cap, std::nullopt);
+            std::vector<std::atomic<int> > atomic_colors(node_cap);
+
             // Initialize atomic colors
             std::for_each(policy, atomic_colors.begin(), atomic_colors.end(),
-                [](auto& ac) { ac.store(-1); });
+                          [](auto &ac) { ac.store(-1); });
 
             // Get sorted node list for deterministic coloring
             std::vector<std::size_t> node_ids;
@@ -1909,33 +1910,33 @@ namespace litegraph {
 
             // Process nodes in batches to reduce conflicts
             const size_t batch_size = std::max(size_t{1}, node_ids.size() / std::thread::hardware_concurrency());
-            
+
             for (size_t start = 0; start < node_ids.size(); start += batch_size) {
                 size_t end = std::min(start + batch_size, node_ids.size());
                 auto batch_range = std::span(node_ids).subspan(start, end - start);
-                
+
                 std::for_each(policy, batch_range.begin(), batch_range.end(),
-                    [&](std::size_t nid_val) {
-                        NodeId u{nid_val};
-                        std::set<int> neighbor_colors;
+                              [&](std::size_t nid_val) {
+                                  NodeId u{nid_val};
+                                  std::set<int> neighbor_colors;
 
-                        // Collect neighbor colors
-                        for (auto v: g.neighbors(u)) {
-                            int color = atomic_colors[v.value].load();
-                            if (color >= 0) {
-                                neighbor_colors.insert(color);
-                            }
-                        }
+                                  // Collect neighbor colors
+                                  for (auto v: g.neighbors(u)) {
+                                      int color = atomic_colors[v.value].load();
+                                      if (color >= 0) {
+                                          neighbor_colors.insert(color);
+                                      }
+                                  }
 
-                        // Find smallest available color
-                        int current_color = 0;
-                        while (neighbor_colors.contains(current_color)) {
-                            current_color++;
-                        }
+                                  // Find smallest available color
+                                  int current_color = 0;
+                                  while (neighbor_colors.contains(current_color)) {
+                                      current_color++;
+                                  }
 
-                        atomic_colors[u.value].store(current_color);
-                        colors[u.value] = current_color;
-                    });
+                                  atomic_colors[u.value].store(current_color);
+                                  colors[u.value] = current_color;
+                              });
             }
 
             return colors;
@@ -1943,66 +1944,64 @@ namespace litegraph {
 
         // Parallel connected components using Union-Find
         template<LiteGraphModel GraphT, typename ExecPolicy>
-        requires std::is_execution_policy_v<std::remove_cvref_t<ExecPolicy>>
-        std::vector<std::size_t> parallel_connected_components(ExecPolicy&& policy, const GraphT &g) {
+            requires std::is_execution_policy_v<std::remove_cvref_t<ExecPolicy> >
+        std::vector<std::size_t> parallel_connected_components(ExecPolicy &&policy, const GraphT &g) {
             static_assert(std::is_same_v<typename GraphT::directed_tag, Undirected>,
-                         "Connected components are typically computed for undirected graphs.");
+                          "Connected components are typically computed for undirected graphs.");
 
             const size_t node_cap = g.node_capacity();
-            std::vector<std::atomic<std::size_t>> parent(node_cap);
+            std::vector<std::atomic<std::size_t> > parent(node_cap);
             std::vector<std::size_t> result(node_cap);
 
             // Initialize parent pointers
             auto indices = std::views::iota(std::size_t{0}, node_cap);
             std::for_each(policy, indices.begin(), indices.end(),
-                [&](std::size_t i) { parent[i].store(i); });
+                          [&](std::size_t i) { parent[i].store(i); });
 
             // Parallel edge processing with atomic operations
             auto edges_range = g.edges();
             std::for_each(policy, edges_range.begin(), edges_range.end(),
-                [&](const auto& edge_pair) {
-                    const auto& [eid_val, edge] = edge_pair;
-                    
-                    // Find with path compression (lock-free)
-                    auto find = [&](std::size_t x) -> std::size_t {
-                        while (true) {
-                            std::size_t p = parent[x].load();
-                            if (p == x) return x;
-                            std::size_t gp = parent[p].load();
-                            if (parent[x].compare_exchange_weak(p, gp)) {
-                                x = gp;
-                            } else {
-                                x = parent[x].load();
-                            }
-                        }
-                    };
+                          [&](const auto &edge_pair) {
+                              const auto &[eid_val, edge] = edge_pair;
 
-                    std::size_t root1 = find(edge.from.value);
-                    std::size_t root2 = find(edge.to.value);
+                              // Find with path compression (lock-free)
+                              auto find = [&](std::size_t x) -> std::size_t {
+                                  while (true) {
+                                      std::size_t p = parent[x].load();
+                                      if (p == x) return x;
+                                      std::size_t gp = parent[p].load();
+                                      if (parent[x].compare_exchange_weak(p, gp)) {
+                                          x = gp;
+                                      } else {
+                                          x = parent[x].load();
+                                      }
+                                  }
+                              };
 
-                    // Union operation
-                    if (root1 != root2) {
-                        if (root1 > root2) std::swap(root1, root2);
-                        parent[root2].compare_exchange_strong(root2, root1);
-                    }
-                });
+                              std::size_t root1 = find(edge.from.value);
+                              std::size_t root2 = find(edge.to.value);
+
+                              // Union operation
+                              if (root1 != root2) {
+                                  if (root1 > root2) std::swap(root1, root2);
+                                  parent[root2].compare_exchange_strong(root2, root1);
+                              }
+                          });
 
             // Final path compression and result collection
             std::for_each(policy, indices.begin(), indices.end(),
-                [&](std::size_t i) {
-                    std::size_t root = i;
-                    while (parent[root].load() != root) {
-                        root = parent[root].load();
-                    }
-                    result[i] = root;
-                });
+                          [&](std::size_t i) {
+                              std::size_t root = i;
+                              while (parent[root].load() != root) {
+                                  root = parent[root].load();
+                              }
+                              result[i] = root;
+                          });
 
             return result;
         }
-
     } // namespace parallel
-
-    } // namespace litegraph
+} // namespace litegraph
 
 #include <concepts>
 #include <deque>
@@ -2011,10 +2010,10 @@ namespace litegraph {
 namespace akriti {
     namespace graph {
         namespace layout_extras {
-
             // Detect whether a type is hashable via std::hash<T>{}(t)
             template<typename T>
-            concept Hashable = requires(T a) {
+            concept Hashable = requires(T a)
+            {
                 { std::hash<T>{}(a) } -> std::convertible_to<std::size_t>;
             };
 
@@ -2089,7 +2088,7 @@ namespace akriti {
                 };
 
                 // adjacency and indegree by position
-                std::vector<std::vector<std::size_t>> adj(N);
+                std::vector<std::vector<std::size_t> > adj(N);
                 std::vector<std::size_t> indegree(N, 0);
 
                 // Expect edges to be pair-like: .first / .second
@@ -2174,7 +2173,7 @@ namespace akriti {
                 std::ranges::input_range NodeRange,
                 std::ranges::input_range EdgeRange
             >
-            requires (!Hashable<Index> && !std::totally_ordered<Index>)
+                requires (!Hashable<Index> && !std::totally_ordered<Index>)
             bool stable_toposort_kahn_by_index(
                 const NodeRange &nodes,
                 const EdgeRange &edges,
@@ -2194,7 +2193,7 @@ namespace akriti {
                 };
 
                 // adjacency and indegree by position
-                std::vector<std::vector<std::size_t>> adj(N);
+                std::vector<std::vector<std::size_t> > adj(N);
                 std::vector<std::size_t> indegree(N, 0);
 
                 // Expect edges to be pair-like: .first / .second
@@ -2247,7 +2246,6 @@ namespace akriti {
                 }
                 return false;
             }
-
         } // namespace layout_extras
     } // namespace graph
 } // namespace akriti

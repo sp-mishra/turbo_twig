@@ -40,12 +40,14 @@ namespace litegraph {
 
     // C++23 Concepts for type constraints
     template<typename T>
-    concept Hashable = requires(T t) {
+    concept Hashable = requires(T t)
+    {
         std::hash<T>{}(t);
     } && std::equality_comparable<T>;
 
     template<typename T>
-    concept Serializable = requires(T t) {
+    concept Serializable = requires(T t)
+    {
         { std::format("{}", t) } -> std::convertible_to<std::string>;
     };
 
@@ -58,32 +60,38 @@ namespace litegraph {
     // Strong types for IDs with enhanced safety
     struct NodeId {
         std::size_t value;
-        
-        constexpr NodeId() noexcept : value(std::numeric_limits<std::size_t>::max()) {}
-        explicit constexpr NodeId(std::size_t v) noexcept : value(v) {}
-        
-        explicit constexpr operator std::size_t() const noexcept { return value; }
-        
-        [[nodiscard]] constexpr bool is_valid() const noexcept { 
-            return value != std::numeric_limits<std::size_t>::max(); 
+
+        constexpr NodeId() noexcept : value(std::numeric_limits<std::size_t>::max()) {
         }
-        
-        constexpr auto operator<=>(const NodeId& other) const noexcept = default;
+
+        explicit constexpr NodeId(std::size_t v) noexcept : value(v) {
+        }
+
+        explicit constexpr operator std::size_t() const noexcept { return value; }
+
+        [[nodiscard]] constexpr bool is_valid() const noexcept {
+            return value != std::numeric_limits<std::size_t>::max();
+        }
+
+        constexpr auto operator<=>(const NodeId &other) const noexcept = default;
     };
 
     struct EdgeId {
         std::size_t value;
-        
-        constexpr EdgeId() noexcept : value(std::numeric_limits<std::size_t>::max()) {}
-        explicit constexpr EdgeId(std::size_t v) noexcept : value(v) {}
-        
-        explicit constexpr operator std::size_t() const noexcept { return value; }
-        
-        [[nodiscard]] constexpr bool is_valid() const noexcept { 
-            return value != std::numeric_limits<std::size_t>::max(); 
+
+        constexpr EdgeId() noexcept : value(std::numeric_limits<std::size_t>::max()) {
         }
-        
-        constexpr auto operator<=>(const EdgeId& other) const noexcept = default;
+
+        explicit constexpr EdgeId(std::size_t v) noexcept : value(v) {
+        }
+
+        explicit constexpr operator std::size_t() const noexcept { return value; }
+
+        [[nodiscard]] constexpr bool is_valid() const noexcept {
+            return value != std::numeric_limits<std::size_t>::max();
+        }
+
+        constexpr auto operator<=>(const EdgeId &other) const noexcept = default;
     };
 
     // Invalid ID constants
@@ -92,37 +100,38 @@ namespace litegraph {
 
     // C++23 Graph Model Concept - Enhanced
     template<typename G>
-    concept LiteGraphModel = requires(G g, const G cg, typename G::node_type node_data, 
-                                    typename G::edge_type edge_data, NodeId nid, EdgeId eid) {
+    concept LiteGraphModel = requires(G g, const G cg, typename G::node_type node_data,
+                                      typename G::edge_type edge_data, NodeId nid, EdgeId eid)
+    {
         // Type requirements
         typename G::node_type;
         typename G::edge_type;
         typename G::directed_tag;
-        
+
         // Basic operations with proper return types
         { g.add_node(node_data) } -> std::same_as<NodeId>;
         { g.add_edge(nid, nid, edge_data) } -> std::same_as<EdgeId>;
         { g.remove_node(nid) } -> std::same_as<void>;
         { g.remove_edge(eid) } -> std::same_as<void>;
-        
+
         // Data access
-        { g.node_data(nid) } -> std::same_as<typename G::node_type&>;
-        { cg.node_data(nid) } -> std::same_as<const typename G::node_type&>;
-        { g.edge_data(eid) } -> std::same_as<typename G::edge_type&>;
-        { cg.edge_data(eid) } -> std::same_as<const typename G::edge_type&>;
-        
+        { g.node_data(nid) } -> std::same_as<typename G::node_type &>;
+        { cg.node_data(nid) } -> std::same_as<const typename G::node_type &>;
+        { g.edge_data(eid) } -> std::same_as<typename G::edge_type &>;
+        { cg.edge_data(eid) } -> std::same_as<const typename G::edge_type &>;
+
         // Structure queries
         { cg.valid_node(nid) } -> std::same_as<bool>;
         { cg.valid_edge(eid) } -> std::same_as<bool>;
         { cg.node_count() } -> std::same_as<std::size_t>;
         { cg.edge_count() } -> std::same_as<std::size_t>;
         { cg.node_capacity() } -> std::same_as<std::size_t>;
-        
+
         // Navigation
         { cg.neighbors(nid) };
         { cg.out_edges(nid) };
         { cg.degree(nid) } -> std::same_as<std::size_t>;
-        
+
         // Iteration
         { cg.nodes() };
         { cg.edges() };
@@ -139,11 +148,11 @@ namespace litegraph {
         using node_type = NodeT;
         using edge_type = EdgeT;
         using directed_tag = Directedness;
-        using IdMap = std::vector<std::optional<std::size_t>>;
-        
+        using IdMap = std::vector<std::optional<std::size_t> >;
+
         // C++23 deducing this for CRTP-like behavior without inheritance
         template<typename Self>
-        constexpr auto get_directedness(this Self&&) -> Directedness { return {}; }
+        constexpr auto get_directedness(this Self &&) -> Directedness { return {}; }
 
         // Node/Edge internal structures
         struct Node {
@@ -437,48 +446,48 @@ namespace litegraph {
 
         // C++23 parallel operations support
         template<typename Exec>
-        void parallel_clear_inactive(Exec&& policy) 
-            requires std::is_execution_policy_v<std::remove_cvref_t<Exec>> {
+        void parallel_clear_inactive(Exec &&policy)
+            requires std::is_execution_policy_v<std::remove_cvref_t<Exec> > {
             // Parallel removal of inactive elements
             auto node_end = std::remove_if(policy, nodes_.begin(), nodes_.end(),
-                [](const auto& node) { return !node.active; });
+                                           [](const auto &node) { return !node.active; });
             nodes_.erase(node_end, nodes_.end());
-            
+
             auto edge_end = std::remove_if(policy, edges_.begin(), edges_.end(),
-                [](const auto& edge) { return !edge.active; });
+                                           [](const auto &edge) { return !edge.active; });
             edges_.erase(edge_end, edges_.end());
-            
+
             // Recalculate counts
             active_node_count_ = std::count_if(policy, nodes_.begin(), nodes_.end(),
-                [](const auto& node) { return node.active; });
+                                               [](const auto &node) { return node.active; });
             active_edge_count_ = std::count_if(policy, edges_.begin(), edges_.end(),
-                [](const auto& edge) { return edge.active; });
+                                               [](const auto &edge) { return edge.active; });
         }
 
         // Parallel node processing
         template<typename Exec, typename UnaryPred>
-        auto parallel_count_nodes_if(Exec&& policy, UnaryPred pred) const 
-            requires std::is_execution_policy_v<std::remove_cvref_t<Exec>> {
+        auto parallel_count_nodes_if(Exec &&policy, UnaryPred pred) const
+            requires std::is_execution_policy_v<std::remove_cvref_t<Exec> > {
             return std::count_if(policy, nodes_.begin(), nodes_.end(),
-                [&](const auto& node) { return node.active && pred(node); });
+                                 [&](const auto &node) { return node.active && pred(node); });
         }
 
         // Error handling with std::expected
-        [[nodiscard]] std::expected<NodeT&, GraphError> try_node_data(NodeId nid) noexcept {
+        [[nodiscard]] std::expected<NodeT &, GraphError> try_node_data(NodeId nid) noexcept {
             if (!valid_node(nid)) {
                 return std::unexpected(GraphError::InvalidNode);
             }
             return std::ref(nodes_[nid.value].data);
         }
 
-        [[nodiscard]] std::expected<const NodeT&, GraphError> try_node_data(NodeId nid) const noexcept {
+        [[nodiscard]] std::expected<const NodeT &, GraphError> try_node_data(NodeId nid) const noexcept {
             if (!valid_node(nid)) {
                 return std::unexpected(GraphError::InvalidNode);
             }
             return std::cref(nodes_[nid.value].data);
         }
 
-        [[nodiscard]] std::expected<EdgeT&, GraphError> try_edge_data(EdgeId eid) noexcept {
+        [[nodiscard]] std::expected<EdgeT &, GraphError> try_edge_data(EdgeId eid) noexcept {
             if (!valid_edge(eid)) {
                 return std::unexpected(GraphError::InvalidEdge);
             }
@@ -490,7 +499,7 @@ namespace litegraph {
             return std::views::iota(std::size_t{0}, nodes_.size())
                    | std::views::filter([this](std::size_t i) { return nodes_[i].active; })
                    | std::views::transform([this](std::size_t i) {
-                       return std::pair<NodeId, const NodeT&>{NodeId{i}, nodes_[i].data};
+                       return std::pair<NodeId, const NodeT &>{NodeId{i}, nodes_[i].data};
                    });
         }
 
@@ -498,18 +507,18 @@ namespace litegraph {
             return std::views::iota(std::size_t{0}, edges_.size())
                    | std::views::filter([this](std::size_t i) { return edges_[i].active; })
                    | std::views::transform([this](std::size_t i) {
-                       return std::pair<EdgeId, const Edge&>{EdgeId{i}, edges_[i]};
+                       return std::pair<EdgeId, const Edge &>{EdgeId{i}, edges_[i]};
                    });
         }
 
         // Memory-efficient batch operations
         template<std::ranges::input_range Range>
-        void batch_add_nodes(Range&& node_data_range) 
+        void batch_add_nodes(Range &&node_data_range)
             requires std::convertible_to<std::ranges::range_value_t<Range>, NodeT> {
             const auto size_hint = std::ranges::size(node_data_range);
             nodes_.reserve(nodes_.size() + size_hint);
-            
-            for (auto&& data : node_data_range) {
+
+            for (auto &&data: node_data_range) {
                 nodes_.push_back({std::forward<decltype(data)>(data), {}, {}, true});
                 active_node_count_++;
             }
@@ -520,10 +529,10 @@ namespace litegraph {
             requires std::same_as<T, double> || std::same_as<T, float>
         auto as_node_matrix(std::size_t rows, std::size_t cols) const {
             static_assert(std::is_arithmetic_v<T>, "Matrix view requires numeric node data");
-            
+
             // Create a view of node data as a matrix
-            auto data_ptr = reinterpret_cast<const T*>(nodes_.data());
-            return std::mdspan<const T, std::dextents<std::size_t, 2>>(
+            auto data_ptr = reinterpret_cast<const T *>(nodes_.data());
+            return std::mdspan<const T, std::dextents<std::size_t, 2> >(
                 data_ptr, rows, cols);
         }
 
@@ -543,11 +552,10 @@ namespace litegraph {
                 .active_nodes = active_node_count_,
                 .total_edges = edges_.size(),
                 .active_edges = active_edge_count_,
-                .load_factor = nodes_.empty() ? 0.0 : 
-                    static_cast<double>(active_node_count_) / nodes_.size(),
-                .memory_usage = sizeof(*this) + 
-                    nodes_.capacity() * sizeof(Node) +
-                    edges_.capacity() * sizeof(Edge)
+                .load_factor = nodes_.empty() ? 0.0 : static_cast<double>(active_node_count_) / nodes_.size(),
+                .memory_usage = sizeof(*this) +
+                                nodes_.capacity() * sizeof(Node) +
+                                edges_.capacity() * sizeof(Edge)
             };
         }
 
@@ -567,12 +575,12 @@ namespace litegraph {
 
     // Graph factory functions with perfect forwarding
     template<typename... Args>
-    auto make_directed_graph(Args&&... args) {
+    auto make_directed_graph(Args &&... args) {
         return Graph<Args..., Directed>{std::forward<Args>(args)...};
     }
 
-    template<typename... Args>  
-    auto make_undirected_graph(Args&&... args) {
+    template<typename... Args>
+    auto make_undirected_graph(Args &&... args) {
         return Graph<Args..., Undirected>{std::forward<Args>(args)...};
     }
 
@@ -580,6 +588,7 @@ namespace litegraph {
     inline bool operator==(const NodeId &a, const NodeId &b) noexcept {
         return a.value == b.value;
     }
+
     inline bool operator==(const EdgeId &a, const EdgeId &b) noexcept {
         return a.value == b.value;
     }
@@ -588,6 +597,7 @@ namespace litegraph {
     inline bool operator<(const NodeId &a, const NodeId &b) noexcept {
         return a.value < b.value;
     }
+
     inline bool operator<(const EdgeId &a, const EdgeId &b) noexcept {
         return a.value < b.value;
     }

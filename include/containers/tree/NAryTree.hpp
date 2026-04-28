@@ -17,7 +17,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <iostream>
-#include <memory_resource>
+
 #ifdef __x86_64__
 #include <immintrin.h>
 #elif defined(__aarch64__) || defined(__arm64__)
@@ -91,7 +91,7 @@ public:
         block_size_ = INITIAL_POOL_SIZE * sizeof(T);
     }
 
-    size_t total_allocated() const {
+    [[nodiscard]] size_t total_allocated() const {
         size_t total = 0;
         for (const auto &block: blocks_) {
             total += block.size;
@@ -99,7 +99,7 @@ public:
         return total;
     }
 
-    size_t total_used() const {
+    [[nodiscard]] size_t total_used() const {
         size_t total = 0;
         for (const auto &block: blocks_) {
             total += block.used;
@@ -1112,76 +1112,5 @@ public:
         return func(tree_);
     }
 };
-
-
-namespace akriti::tree::layout_extras {
-    template<typename Tree>
-    struct FlatHierarchy {
-        using Node = Tree::TreeNode;
-        using NodePtr = const Node *;
-
-        std::vector<NodePtr> order;
-        // indices into `order`; npos indicates "none"
-        std::vector<std::size_t> parent;
-        std::vector<std::size_t> first_child;
-        std::vector<std::size_t> next_sibling;
-        // subtree range [subtree_begin, subtree_end)
-        std::vector<std::size_t> subtree_begin;
-        std::vector<std::size_t> subtree_end;
-
-        static constexpr std::size_t npos = static_cast<std::size_t>(-1);
-    };
-
-    template<typename Tree>
-    FlatHierarchy<Tree> flatten_preorder(const Tree &tree, const typename Tree::TreeNode *root) {
-        FlatHierarchy<Tree> fh;
-        const std::size_t cap = tree.size(); // reserve up front for determinism & efficiency
-
-        fh.order.reserve(cap);
-        fh.parent.reserve(cap);
-        fh.first_child.reserve(cap);
-        fh.next_sibling.reserve(cap);
-        fh.subtree_begin.reserve(cap);
-        fh.subtree_end.reserve(cap);
-
-        if (!root) return fh;
-
-        // Recursive preorder visitor that uses only public TreeNode API (children)
-        std::function<void(const typename Tree::TreeNode *, std::size_t)> visit;
-        visit = [&](const typename Tree::TreeNode *node, std::size_t parent_index) {
-            const std::size_t my_index = fh.order.size();
-            fh.order.push_back(node);
-            fh.parent.push_back(parent_index);
-            fh.first_child.push_back(FlatHierarchy<Tree>::npos);
-            fh.next_sibling.push_back(FlatHierarchy<Tree>::npos);
-            fh.subtree_begin.push_back(my_index);
-            fh.subtree_end.push_back(FlatHierarchy<Tree>::npos);
-
-            std::size_t prev_child_index = FlatHierarchy<Tree>::npos;
-            for (const auto &child_ptr: node->children) {
-                const typename Tree::TreeNode *child = child_ptr.get();
-                // capture this child's index before recursion so sibling links point to the child node itself
-                const std::size_t child_index = fh.order.size();
-                if (prev_child_index == FlatHierarchy<Tree>::npos) {
-                    // first child will be the next element in order
-                    fh.first_child[my_index] = child_index;
-                } else {
-                    // sibling follows previous child in order (use child's own index)
-                    fh.next_sibling[prev_child_index] = child_index;
-                }
-                visit(child, my_index);
-                // prev_child_index should reference the child node's index, not the last descendant
-                prev_child_index = child_index;
-            }
-
-            // end is one past the last descendant (consistent with [begin,end) convention)
-            fh.subtree_end[my_index] = fh.order.size();
-        };
-
-        visit(root, FlatHierarchy<Tree>::npos);
-        return fh;
-    }
-} // namespace akriti::tree::layout_extras
-
 
 #endif // N_ARY_TREE_H

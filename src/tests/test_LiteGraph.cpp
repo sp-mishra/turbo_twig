@@ -12,7 +12,7 @@ TEST_CASE("[LiteGraph] Basic node/edge operations", "[LiteGraph]") {
     auto n2 = g.add_node(30);
 
     auto e0 = g.add_edge(n0, n1, 5);
-    auto e1 = g.add_edge(n1, n2, 7);
+    g.add_edge(n1, n2, 7);
 
     REQUIRE(g.node_count() == 3);
     REQUIRE(g.edge_count() == 2);
@@ -70,9 +70,9 @@ TEST_CASE("[LiteGraph] Dijkstra shortest path", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Cycle detection", "[LiteGraph]") {
     Graph<int, int, Directed> g;
-    auto n0 = g.add_node();
-    auto n1 = g.add_node();
-    auto n2 = g.add_node();
+    const auto n0 = g.add_node();
+    const auto n1 = g.add_node();
+    const auto n2 = g.add_node();
 
     g.add_edge(n0, n1);
     g.add_edge(n1, n2);
@@ -83,31 +83,31 @@ TEST_CASE("[LiteGraph] Cycle detection", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Kruskal MST", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node();
-    auto n1 = g.add_node();
-    auto n2 = g.add_node();
+    const auto n0 = g.add_node();
+    const auto n1 = g.add_node();
+    const auto n2 = g.add_node();
 
     g.add_edge(n0, n1, 1);
     g.add_edge(n1, n2, 2);
     g.add_edge(n0, n2, 3);
 
-    auto mst = kruskal_mst(g, [](const int &w) { return double(w); });
+    const auto mst = kruskal_mst(g, [](const int &w) { return double(w); });
     REQUIRE(mst.size() == 2);
 }
 
 TEST_CASE("[LiteGraph] Prim MST", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node();
-    auto n1 = g.add_node();
-    auto n2 = g.add_node();
-    auto n3 = g.add_node();
+    const auto n0 = g.add_node();
+    const auto n1 = g.add_node();
+    const auto n2 = g.add_node();
+    const auto n3 = g.add_node();
 
     g.add_edge(n0, n1, 1);
     g.add_edge(n1, n2, 2);
     g.add_edge(n2, n3, 3);
     g.add_edge(n3, n0, 4);
 
-    auto mst = prim_mst(g, [](const int &w) { return double(w); });
+    const auto mst = prim_mst(g, [](const int &w) { return double(w); });
     REQUIRE(mst.size() == 3);
 }
 
@@ -129,15 +129,15 @@ TEST_CASE("[LiteGraph] Topological sort", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Strongly connected components", "[LiteGraph]") {
     Graph<int, int, Directed> g;
-    auto n0 = g.add_node();
-    auto n1 = g.add_node();
-    auto n2 = g.add_node();
+    const auto n0 = g.add_node();
+    const auto n1 = g.add_node();
+    const auto n2 = g.add_node();
 
     g.add_edge(n0, n1);
     g.add_edge(n1, n2);
     g.add_edge(n2, n0);
 
-    auto sccs = strongly_connected_components(g);
+    const auto sccs = strongly_connected_components(g);
     REQUIRE(sccs.size() == 1);
     REQUIRE(sccs[0].size() == 3);
 }
@@ -163,13 +163,13 @@ TEST_CASE("[LiteGraph] Greedy coloring", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Reconstruct path unreachable", "[LiteGraph]") {
     Graph<int, int, Directed> g;
-    auto n0 = g.add_node();
-    auto n1 = g.add_node();
+    const auto n0 = g.add_node();
+    const auto n1 = g.add_node();
 
     auto [dist, pred] = dijkstra(g, n0);
     // n1 is unreachable from n0, so dist[n1.value] should be infinity and path should be empty
     REQUIRE(dist[n1.value] == std::numeric_limits<double>::infinity());
-    auto path = reconstruct_path(n1, pred);
+    const auto path = reconstruct_path(n1, pred);
     REQUIRE(path.empty());
 }
 
@@ -177,12 +177,12 @@ TEST_CASE("[LiteGraph] Graph Edit Distance - identical graphs", "[LiteGraph]") {
     Graph<int, int, Undirected> g1;
     Graph<int, int, Undirected> g2;
 
-    auto n0 = g1.add_node(1);
-    auto n1 = g1.add_node(2);
+    const auto n0 = g1.add_node(1);
+    const auto n1 = g1.add_node(2);
     g1.add_edge(n0, n1, 5);
 
-    auto m0 = g2.add_node(1);
-    auto m1 = g2.add_node(2);
+    const auto m0 = g2.add_node(1);
+    const auto m1 = g2.add_node(2);
     g2.add_edge(m0, m1, 5);
 
     auto node_subst = [](const int &a, const int &b) { return a == b ? 0.0 : 1.0; };
@@ -192,7 +192,7 @@ TEST_CASE("[LiteGraph] Graph Edit Distance - identical graphs", "[LiteGraph]") {
     auto edge_ins = [](const int &) { return 1.0; };
     auto edge_del = [](const int &) { return 1.0; };
 
-    double dist = graph_edit_distance(
+    const double dist = graph_edit_distance(
         g1, g2, node_subst, node_ins, node_del, edge_subst, edge_ins, edge_del
     );
     REQUIRE(dist == Catch::Approx(0.0));
@@ -202,12 +202,12 @@ TEST_CASE("[LiteGraph] Graph Edit Distance - node substitution", "[LiteGraph]") 
     Graph<int, int, Undirected> g1;
     Graph<int, int, Undirected> g2;
 
-    auto n0 = g1.add_node(1);
-    auto n1 = g1.add_node(2);
+    const auto n0 = g1.add_node(1);
+    const auto n1 = g1.add_node(2);
     g1.add_edge(n0, n1, 5);
 
-    auto m0 = g2.add_node(1);
-    auto m1 = g2.add_node(3); // different value
+    const auto m0 = g2.add_node(1);
+    const auto m1 = g2.add_node(3); // different value
     g2.add_edge(m0, m1, 5);
 
     auto node_subst = [](const int &a, const int &b) { return a == b ? 0.0 : 2.0; };
@@ -217,7 +217,7 @@ TEST_CASE("[LiteGraph] Graph Edit Distance - node substitution", "[LiteGraph]") 
     auto edge_ins = [](const int &) { return 1.0; };
     auto edge_del = [](const int &) { return 1.0; };
 
-    double dist = graph_edit_distance(
+    const double dist = graph_edit_distance(
         g1, g2, node_subst, node_ins, node_del, edge_subst, edge_ins, edge_del
     );
     REQUIRE(dist == Catch::Approx(2.0));
@@ -227,12 +227,12 @@ TEST_CASE("[LiteGraph] Graph Edit Distance - edge insertion", "[LiteGraph]") {
     Graph<int, int, Undirected> g1;
     Graph<int, int, Undirected> g2;
 
-    auto n0 = g1.add_node(1);
-    auto n1 = g1.add_node(2);
+    g1.add_node(1);
+    g1.add_node(2);
     // g1: no edge
 
-    auto m0 = g2.add_node(1);
-    auto m1 = g2.add_node(2);
+    const auto m0 = g2.add_node(1);
+    const auto m1 = g2.add_node(2);
     g2.add_edge(m0, m1, 5); // g2: has edge
 
     auto node_subst = [](const int &a, const int &b) { return a == b ? 0.0 : 1.0; };
@@ -242,7 +242,7 @@ TEST_CASE("[LiteGraph] Graph Edit Distance - edge insertion", "[LiteGraph]") {
     auto edge_ins = [](const int &) { return 3.0; }; // match the actual cost used by the algorithm
     auto edge_del = [](const int &) { return 2.0; };
 
-    double dist = graph_edit_distance(
+    const double dist = graph_edit_distance(
         g1, g2, node_subst, node_ins, node_del, edge_subst, edge_ins, edge_del
     );
     REQUIRE(dist == Catch::Approx(3.0));
@@ -252,10 +252,10 @@ TEST_CASE("[LiteGraph] Graph Edit Distance - node insertion", "[LiteGraph]") {
     Graph<int, int, Undirected> g1;
     Graph<int, int, Undirected> g2;
 
-    auto n0 = g1.add_node(1);
+    g1.add_node(1);
 
-    auto m0 = g2.add_node(1);
-    auto m1 = g2.add_node(2);
+    g2.add_node(1);
+    g2.add_node(2);
 
     auto node_subst = [](const int &a, const int &b) { return a == b ? 0.0 : 1.0; };
     auto node_ins = [](const int &) { return 4.0; };
@@ -264,7 +264,7 @@ TEST_CASE("[LiteGraph] Graph Edit Distance - node insertion", "[LiteGraph]") {
     auto edge_ins = [](const int &) { return 1.0; };
     auto edge_del = [](const int &) { return 1.0; };
 
-    double dist = graph_edit_distance(
+    const double dist = graph_edit_distance(
         g1, g2, node_subst, node_ins, node_del, edge_subst, edge_ins, edge_del
     );
     REQUIRE(dist == Catch::Approx(4.0));
@@ -302,7 +302,7 @@ TEST_CASE("[LiteGraph] Self-loop and multi-edge", "[LiteGraph]") {
     REQUIRE(g.degree(n0) == 2); // Self-loop counts as two for undirected
 
     // Add another self-loop (multi-edge)
-    auto e1 = g.add_edge(n0, n0, 99);
+    g.add_edge(n0, n0, 99);
     REQUIRE(g.edge_count() == 2);
     REQUIRE(g.degree(n0) == 4);
 
@@ -314,9 +314,9 @@ TEST_CASE("[LiteGraph] Self-loop and multi-edge", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Directed self-loop and in/out degree", "[LiteGraph]") {
     Graph<int, int, Directed> g;
-    auto n0 = g.add_node(1);
+    const auto n0 = g.add_node(1);
 
-    auto e0 = g.add_edge(n0, n0, 7);
+    g.add_edge(n0, n0, 7);
     REQUIRE(g.edge_count() == 1);
     REQUIRE(g.out_degree(n0) == 1);
     REQUIRE(g.in_degree(n0) == 1);
@@ -403,7 +403,8 @@ TEST_CASE("[LiteGraph] Complete graph properties", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     const int N = 5;
     std::vector<NodeId> nodes;
-    for (int i = 0; i < N; ++i) nodes.push_back(g.add_node(i));
+    nodes.reserve(N);
+for (int i = 0; i < N; ++i) nodes.push_back(g.add_node(i));
     for (int i = 0; i < N; ++i)
         for (int j = i + 1; j < N; ++j)
             g.add_edge(nodes[i], nodes[j], 1);
@@ -439,23 +440,23 @@ TEST_CASE("[LiteGraph] Add and remove edge between same nodes multiple times", "
 
 TEST_CASE("[LiteGraph] Remove edge that does not exist", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
 
-    auto e0 = g.add_edge(n0, n1, 10);
+    const auto e0 = g.add_edge(n0, n1, 10);
     g.remove_edge(e0);
     REQUIRE_THROWS_AS(g.remove_edge(e0), std::out_of_range);
 }
 
 TEST_CASE("[LiteGraph] Remove node with multiple edges", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
-    auto n2 = g.add_node(3);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
+    const auto n2 = g.add_node(3);
 
-    auto e0 = g.add_edge(n0, n1, 10);
-    auto e1 = g.add_edge(n1, n2, 20);
-    auto e2 = g.add_edge(n0, n2, 30);
+    g.add_edge(n0, n1, 10);
+    g.add_edge(n1, n2, 20);
+    g.add_edge(n0, n2, 30);
 
     REQUIRE(g.edge_count() == 3);
 
@@ -467,9 +468,9 @@ TEST_CASE("[LiteGraph] Remove node with multiple edges", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Remove node with self-loop", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
+    const auto n0 = g.add_node(1);
 
-    auto e0 = g.add_edge(n0, n0, 42);
+    g.add_edge(n0, n0, 42);
     REQUIRE(g.edge_count() == 1);
 
     g.remove_node(n0);
@@ -479,30 +480,30 @@ TEST_CASE("[LiteGraph] Remove node with self-loop", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Add edge with invalid node", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    NodeId invalid{100};
+    const auto n0 = g.add_node(1);
+    const NodeId invalid{100};
     REQUIRE_THROWS_AS(g.add_edge(n0, invalid, 5), std::out_of_range);
     REQUIRE_THROWS_AS(g.add_edge(invalid, n0, 5), std::out_of_range);
 }
 
 TEST_CASE("[LiteGraph] Remove node that does not exist", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    NodeId invalid{100};
+    g.add_node(1);
+    constexpr NodeId invalid{100};
     REQUIRE_THROWS_AS(g.remove_node(invalid), std::out_of_range);
 }
 
 TEST_CASE("[LiteGraph] Remove all, then add again", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
-    auto e0 = g.add_edge(n0, n1, 10);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
+    g.add_edge(n0, n1, 10);
     g.remove_node(n0);
     g.remove_node(n1);
     g.compact();
-    auto n2 = g.add_node(3);
-    auto n3 = g.add_node(4);
-    auto e1 = g.add_edge(n2, n3, 20);
+    const auto n2 = g.add_node(3);
+    const auto n3 = g.add_node(4);
+    const auto e1 = g.add_edge(n2, n3, 20);
     REQUIRE(g.edge_count() == 1);
     REQUIRE(g.node_count() == 2);
     REQUIRE(g.edge_data(e1) == 20);
@@ -510,17 +511,17 @@ TEST_CASE("[LiteGraph] Remove all, then add again", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Add edge to removed node throws", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
     g.remove_node(n1);
     REQUIRE_THROWS_AS(g.add_edge(n0, n1, 5), std::out_of_range);
 }
 
 TEST_CASE("[LiteGraph] Remove edge after node removal", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
-    auto e0 = g.add_edge(n0, n1, 10);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
+    const auto e0 = g.add_edge(n0, n1, 10);
     g.remove_node(n1);
     // Edge should be inactive, so removing again should throw
     REQUIRE_THROWS_AS(g.remove_edge(e0), std::out_of_range);
@@ -528,20 +529,20 @@ TEST_CASE("[LiteGraph] Remove edge after node removal", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Remove node with no edges", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
+    const auto n0 = g.add_node(1);
     REQUIRE_NOTHROW(g.remove_node(n0));
     REQUIRE(g.node_count() == 0);
 }
 
 TEST_CASE("[LiteGraph] Add edge after compact", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
-    auto e0 = g.add_edge(n0, n1, 10);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
+    g.add_edge(n0, n1, 10);
     g.remove_node(n1);
     g.compact();
-    auto n2 = g.add_node(3);
-    auto e1 = g.add_edge(n0, n2, 20);
+    const auto n2 = g.add_node(3);
+    const auto e1 = g.add_edge(n0, n2, 20);
     REQUIRE(g.edge_data(e1) == 20);
 }
 
@@ -563,9 +564,9 @@ TEST_CASE("[LiteGraph] Clear graph and reuse", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Exception on get_edge for removed edge", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
-    auto e0 = g.add_edge(n0, n1, 10);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
+    const auto e0 = g.add_edge(n0, n1, 10);
     g.remove_edge(e0);
     REQUIRE_THROWS_AS(g.get_edge(e0), std::out_of_range);
 }
@@ -577,7 +578,7 @@ TEST_CASE("[LiteGraph] Exception on get_edge for out-of-range edge", "[LiteGraph
 
 TEST_CASE("[LiteGraph] Exception on node_data for removed node", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
+    const auto n0 = g.add_node(1);
     g.remove_node(n0);
     REQUIRE_THROWS_AS(g.node_data(n0), std::out_of_range);
 }
@@ -589,9 +590,9 @@ TEST_CASE("[LiteGraph] Exception on node_data for out-of-range node", "[LiteGrap
 
 TEST_CASE("[LiteGraph] Exception on edge_data for removed edge", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
-    auto e0 = g.add_edge(n0, n1, 10);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
+    const auto e0 = g.add_edge(n0, n1, 10);
     g.remove_edge(e0);
     REQUIRE_THROWS_AS(g.edge_data(e0), std::out_of_range);
 }
@@ -603,19 +604,19 @@ TEST_CASE("[LiteGraph] Exception on edge_data for out-of-range edge", "[LiteGrap
 
 TEST_CASE("[LiteGraph] Add edge after all nodes removed and compacted", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
+    const auto n0 = g.add_node(1);
     g.remove_node(n0);
     g.compact();
-    auto n1 = g.add_node(2);
-    auto n2 = g.add_node(3);
-    auto e0 = g.add_edge(n1, n2, 42);
+    const auto n1 = g.add_node(2);
+    const auto n2 = g.add_node(3);
+    const auto e0 = g.add_edge(n1, n2, 42);
     REQUIRE(g.edge_data(e0) == 42);
 }
 
 TEST_CASE("[LiteGraph] Add and remove self-loop edge", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto e0 = g.add_edge(n0, n0, 99);
+    const auto n0 = g.add_node(1);
+    const auto e0 = g.add_edge(n0, n0, 99);
     REQUIRE(g.edge_count() == 1);
     g.remove_edge(e0);
     REQUIRE(g.edge_count() == 0);
@@ -623,9 +624,9 @@ TEST_CASE("[LiteGraph] Add and remove self-loop edge", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Remove node with multiple self-loops", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto e0 = g.add_edge(n0, n0, 1);
-    auto e1 = g.add_edge(n0, n0, 2);
+    const auto n0 = g.add_node(1);
+    g.add_edge(n0, n0, 1);
+    g.add_edge(n0, n0, 2);
     REQUIRE(g.edge_count() == 2);
     g.remove_node(n0);
     REQUIRE(g.node_count() == 0);
@@ -634,14 +635,14 @@ TEST_CASE("[LiteGraph] Remove node with multiple self-loops", "[LiteGraph]") {
 
 TEST_CASE("[LiteGraph] Remove all edges, then add new edge", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(1);
-    auto n1 = g.add_node(2);
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
 
-    auto e0 = g.add_edge(n0, n1, 10);
+    const auto e0 = g.add_edge(n0, n1, 10);
     g.remove_edge(e0);
     REQUIRE(g.edge_count() == 0);
 
-    auto e1 = g.add_edge(n0, n1, 20);
+    const auto e1 = g.add_edge(n0, n1, 20);
     REQUIRE(g.edge_count() == 1);
     REQUIRE(g.edge_data(e1) == 20);
 }
@@ -654,12 +655,12 @@ TEST_CASE("[LiteGraph] Bipartite matching on job assignment", "[LiteGraph][Bipar
     // Worker 1: jobs 1, 2
     // Worker 2: jobs 0, 2
     Graph<std::string, std::string, Undirected> g;
-    auto w0 = g.add_node("worker0");
-    auto w1 = g.add_node("worker1");
-    auto w2 = g.add_node("worker2");
-    auto j0 = g.add_node("job0");
-    auto j1 = g.add_node("job1");
-    auto j2 = g.add_node("job2");
+    const auto w0 = g.add_node("worker0");
+    const auto w1 = g.add_node("worker1");
+    const auto w2 = g.add_node("worker2");
+    const auto j0 = g.add_node("job0");
+    const auto j1 = g.add_node("job1");
+    const auto j2 = g.add_node("job2");
 
     g.add_edge(w0, j0, "can_do");
     g.add_edge(w0, j1, "can_do");
@@ -668,7 +669,7 @@ TEST_CASE("[LiteGraph] Bipartite matching on job assignment", "[LiteGraph][Bipar
     g.add_edge(w2, j0, "can_do");
     g.add_edge(w2, j2, "can_do");
 
-    auto matching = max_bipartite_matching(g);
+    const auto matching = max_bipartite_matching(g);
     REQUIRE(matching.size() == 3); // Perfect matching exists
 }
 
@@ -700,10 +701,10 @@ TEST_CASE("[LiteGraph] Kruskal MST on weighted network", "[LiteGraph][Kruskal]")
     // Graph: 4 nodes, weighted edges
     // 0-1 (1), 0-2 (3), 1-2 (1), 1-3 (4), 2-3 (2)
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
-    auto n3 = g.add_node(3);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
 
     g.add_edge(n0, n1, 1);
     g.add_edge(n0, n2, 3);
@@ -711,11 +712,11 @@ TEST_CASE("[LiteGraph] Kruskal MST on weighted network", "[LiteGraph][Kruskal]")
     g.add_edge(n1, n3, 4);
     g.add_edge(n2, n3, 2);
 
-    auto mst = kruskal_mst(g, [](const int &w) { return double(w); });
+    const auto mst = kruskal_mst(g, [](const int &w) { return double(w); });
     REQUIRE(mst.size() == 3);
     // MST weight should be 1 + 1 + 2 = 4
     double total_weight = 0;
-    for (auto eid: mst) total_weight += g.edge_data(eid);
+    for (const auto eid: mst) total_weight += g.edge_data(eid);
     REQUIRE(total_weight == Catch::Approx(4.0));
 }
 
@@ -744,16 +745,16 @@ TEST_CASE("[LiteGraph] Floyd-Warshall on airline routes", "[LiteGraph][FloydWars
 TEST_CASE("[LiteGraph] Betweenness centrality in social network", "[LiteGraph][Centrality]") {
     // Star network: center node 0, leaves 1-4
     Graph<int, int, Undirected> g;
-    auto center = g.add_node(0);
+    const auto center = g.add_node(0);
     std::vector<NodeId> leaves;
     for (int i = 1; i <= 4; ++i) leaves.push_back(g.add_node(i));
-    for (auto leaf: leaves) g.add_edge(center, leaf, 1);
+    for (const auto leaf: leaves) g.add_edge(center, leaf, 1);
 
     auto centrality = betweenness_centrality(g);
     // Center should have highest centrality
-    double max_centrality = *std::max_element(centrality.begin(), centrality.end());
+    const double max_centrality = *std::max_element(centrality.begin(), centrality.end());
     REQUIRE(centrality[center.value] == max_centrality);
-    for (auto leaf: leaves) {
+    for (const auto leaf: leaves) {
         REQUIRE(centrality[center.value] > centrality[leaf.value]);
     }
 }
@@ -788,6 +789,7 @@ TEST_CASE("[LiteGraph] VF2 subgraph isomorphism: triangle in complete graph", "[
 
     Graph<int, int, Undirected> target;
     std::vector<NodeId> tnodes;
+    tnodes.reserve(4);
     for (int i = 0; i < 4; ++i) tnodes.push_back(target.add_node());
     for (int i = 0; i < 4; ++i)
         for (int j = i + 1; j < 4; ++j)
@@ -801,6 +803,7 @@ TEST_CASE("[LiteGraph] VF2 subgraph isomorphism: triangle in complete graph", "[
     for (const auto &match_map: matches) {
         std::vector<std::size_t> target_nodes;
         // Extract the target node IDs from the map's values.
+        target_nodes.reserve(match_map.size());
         for (const auto &pair: match_map) {
             target_nodes.push_back(pair.second);
         }
@@ -819,9 +822,9 @@ TEST_CASE("[LiteGraph] Bellman-Ford: currency arbitrage detection", "[LiteGraph]
     // Currencies: USD(0), EUR(1), GBP(2)
     // Edges: log exchange rates (negative log for arbitrage detection)
     Graph<std::string, double, Directed> g;
-    auto usd = g.add_node("USD");
-    auto eur = g.add_node("EUR");
-    auto gbp = g.add_node("GBP");
+    const auto usd = g.add_node("USD");
+    const auto eur = g.add_node("EUR");
+    const auto gbp = g.add_node("GBP");
 
     g.add_edge(usd, eur, -std::log(0.9)); // USD->EUR
     g.add_edge(eur, gbp, -std::log(0.8)); // EUR->GBP
@@ -835,11 +838,11 @@ TEST_CASE("[LiteGraph] Prim MST: fiber optic network", "[LiteGraph][Prim]") {
     // Cities: 0,1,2,3,4
     // Edges: cost to lay fiber
     Graph<std::string, int, Undirected> g;
-    auto c0 = g.add_node("A");
-    auto c1 = g.add_node("B");
-    auto c2 = g.add_node("C");
-    auto c3 = g.add_node("D");
-    auto c4 = g.add_node("E");
+    const auto c0 = g.add_node("A");
+    const auto c1 = g.add_node("B");
+    const auto c2 = g.add_node("C");
+    const auto c3 = g.add_node("D");
+    const auto c4 = g.add_node("E");
 
     g.add_edge(c0, c1, 10);
     g.add_edge(c0, c2, 20);
@@ -848,10 +851,10 @@ TEST_CASE("[LiteGraph] Prim MST: fiber optic network", "[LiteGraph][Prim]") {
     g.add_edge(c2, c3, 30);
     g.add_edge(c3, c4, 7);
 
-    auto mst = prim_mst(g, [](const int &w) { return double(w); });
+    const auto mst = prim_mst(g, [](const int &w) { return double(w); });
     REQUIRE(mst.size() == 4);
     double total = 0;
-    for (auto eid: mst) total += g.edge_data(eid);
+    for (const auto eid: mst) total += g.edge_data(eid);
     REQUIRE(total == Catch::Approx(10 + 5 + 15 + 7));
 }
 
@@ -859,10 +862,10 @@ TEST_CASE("[LiteGraph] Edmonds-Karp max flow: water distribution", "[LiteGraph][
     // Nodes: 0 (source), 1, 2, 3 (sink)
     // Edges: capacities
     Graph<std::string, int, Directed> g;
-    auto src = g.add_node("Reservoir");
-    auto n1 = g.add_node("Junction1");
-    auto n2 = g.add_node("Junction2");
-    auto sink = g.add_node("City");
+    const auto src = g.add_node("Reservoir");
+    const auto n1 = g.add_node("Junction1");
+    const auto n2 = g.add_node("Junction2");
+    const auto sink = g.add_node("City");
 
     g.add_edge(src, n1, 10);
     g.add_edge(src, n2, 5);
@@ -870,23 +873,23 @@ TEST_CASE("[LiteGraph] Edmonds-Karp max flow: water distribution", "[LiteGraph][
     g.add_edge(n1, sink, 10);
     g.add_edge(n2, sink, 10);
 
-    double maxflow = edmonds_karp_max_flow(g, src, sink, [](const int &w) { return double(w); });
+    const double maxflow = edmonds_karp_max_flow(g, src, sink, [](const int &w) { return double(w); });
     REQUIRE(maxflow == Catch::Approx(15.0));
 }
 
 TEST_CASE("[LiteGraph] Closeness centrality: communication network", "[LiteGraph][Centrality]") {
     // Simple undirected network
     Graph<std::string, int, Undirected> g;
-    auto a = g.add_node("A");
-    auto b = g.add_node("B");
-    auto c = g.add_node("C");
-    auto d = g.add_node("D");
+    const auto a = g.add_node("A");
+    const auto b = g.add_node("B");
+    const auto c = g.add_node("C");
+    const auto d = g.add_node("D");
 
     g.add_edge(a, b, 1);
     g.add_edge(b, c, 1);
     g.add_edge(c, d, 1);
 
-    auto closeness = closeness_centrality(g);
+    const auto closeness = closeness_centrality(g);
     // Node B and C should have higher centrality than A or D
     REQUIRE(closeness[b.value] > closeness[a.value]);
     REQUIRE(closeness[c.value] > closeness[d.value]);
@@ -894,10 +897,10 @@ TEST_CASE("[LiteGraph] Closeness centrality: communication network", "[LiteGraph
 
 TEST_CASE("[LiteGraph] Degree centrality: friendship network", "[LiteGraph][Centrality]") {
     Graph<std::string, int, Undirected> g;
-    auto alice = g.add_node("Alice");
-    auto bob = g.add_node("Bob");
-    auto carol = g.add_node("Carol");
-    auto dave = g.add_node("Dave");
+    const auto alice = g.add_node("Alice");
+    const auto bob = g.add_node("Bob");
+    const auto carol = g.add_node("Carol");
+    const auto dave = g.add_node("Dave");
 
     g.add_edge(alice, bob, 1);
     g.add_edge(alice, carol, 1);
@@ -905,7 +908,7 @@ TEST_CASE("[LiteGraph] Degree centrality: friendship network", "[LiteGraph][Cent
 
     auto deg = degree_centrality(g);
     // Alice should have highest degree centrality
-    double max_deg = *std::max_element(deg.begin(), deg.end());
+    const double max_deg = *std::max_element(deg.begin(), deg.end());
     REQUIRE(deg[alice.value] == max_deg);
 }
 
@@ -913,17 +916,17 @@ TEST_CASE("[LiteGraph] Strongly connected components: web links", "[LiteGraph][S
     // Web pages: 0,1,2,3
     // Links: 0->1, 1->2, 2->0, 2->3
     Graph<std::string, int, Directed> g;
-    auto p0 = g.add_node("Page0");
-    auto p1 = g.add_node("Page1");
-    auto p2 = g.add_node("Page2");
-    auto p3 = g.add_node("Page3");
+    const auto p0 = g.add_node("Page0");
+    const auto p1 = g.add_node("Page1");
+    const auto p2 = g.add_node("Page2");
+    const auto p3 = g.add_node("Page3");
 
     g.add_edge(p0, p1, 1);
     g.add_edge(p1, p2, 1);
     g.add_edge(p2, p0, 1);
     g.add_edge(p2, p3, 1);
 
-    auto sccs = strongly_connected_components(g);
+    const auto sccs = strongly_connected_components(g);
     // There should be two SCCs: {0,1,2} and {3}
     REQUIRE(sccs.size() == 2);
     bool found3 = false, found012 = false;
@@ -953,7 +956,7 @@ TEST_CASE("[LiteGraph] A* search with admissible heuristic", "[LiteGraph][AStar]
 
     auto [g_costs, pred] = a_star_search(
         g, n0, n3,
-        [](const int& w) { return double(w); },
+        [](const int &w) { return double(w); },
         [&](NodeId n) { return double(heuristic(n)); }
     );
 
@@ -966,67 +969,67 @@ TEST_CASE("[LiteGraph] A* search with admissible heuristic", "[LiteGraph][AStar]
 
 TEST_CASE("[LiteGraph] A* search unreachable target", "[LiteGraph][AStar]") {
     Graph<int, int, Directed> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
 
     g.add_edge(n0, n1, 1);
 
     auto [g_costs, pred] = a_star_search(
         g, n0, n2,
-        [](const int& w) { return double(w); },
+        [](const int &w) { return double(w); },
         [](NodeId) { return 0.0; }
     );
 
     REQUIRE(g_costs[n2.value] == std::numeric_limits<double>::infinity());
-    auto path = reconstruct_path(n2, pred);
+    const auto path = reconstruct_path(n2, pred);
     REQUIRE(path.empty());
 }
 
 TEST_CASE("[LiteGraph] Floyd-Warshall with negative weights", "[LiteGraph][FloydWarshall]") {
     Graph<int, int, Directed> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
 
     g.add_edge(n0, n1, 4);
     g.add_edge(n1, n2, -2);
     g.add_edge(n0, n2, 5);
 
-    auto [dist, next] = floyd_warshall(g, [](const int& w) { return double(w); });
+    auto [dist, next] = floyd_warshall(g, [](const int &w) { return double(w); });
     REQUIRE(dist[n0.value][n2.value] == Catch::Approx(2.0));
 }
 
 TEST_CASE("[LiteGraph] Bellman-Ford with no negative cycle", "[LiteGraph][BellmanFord]") {
     Graph<int, int, Directed> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
 
     g.add_edge(n0, n1, -1);
     g.add_edge(n1, n2, -2);
     g.add_edge(n0, n2, 5);
 
-    auto [dist, pred, has_cycle] = bellman_ford(g, n0, [](const int& w) { return double(w); });
+    auto [dist, pred, has_cycle] = bellman_ford(g, n0, [](const int &w) { return double(w); });
     REQUIRE_FALSE(has_cycle);
     REQUIRE(dist[n2.value] == Catch::Approx(-3.0));
 }
 
 TEST_CASE("[LiteGraph] Edmonds-Karp with no path to sink", "[LiteGraph][MaxFlow]") {
     Graph<int, int, Directed> g;
-    auto src = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto sink = g.add_node(2);
+    const auto src = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto sink = g.add_node(2);
 
     g.add_edge(src, n1, 10);
 
-    double flow = edmonds_karp_max_flow(g, src, sink, [](const int& w) { return double(w); });
+    const double flow = edmonds_karp_max_flow(g, src, sink, [](const int &w) { return double(w); });
     REQUIRE(flow == Catch::Approx(0.0));
 }
 
 TEST_CASE("[LiteGraph] Directed graph cycle detection with self-loop", "[LiteGraph][Cycle]") {
     Graph<int, int, Directed> g;
-    auto n0 = g.add_node(0);
+    const auto n0 = g.add_node(0);
     g.add_edge(n0, n0, 1);
 
     REQUIRE(has_cycle(g));
@@ -1034,8 +1037,8 @@ TEST_CASE("[LiteGraph] Directed graph cycle detection with self-loop", "[LiteGra
 
 TEST_CASE("[LiteGraph] Undirected graph cycle detection with parallel edges", "[LiteGraph][Cycle]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
 
     g.add_edge(n0, n1, 1);
     g.add_edge(n0, n1, 2);
@@ -1045,21 +1048,21 @@ TEST_CASE("[LiteGraph] Undirected graph cycle detection with parallel edges", "[
 
 TEST_CASE("[LiteGraph] VF2 with edge compatibility check", "[LiteGraph][VF2]") {
     Graph<int, int, Undirected> pattern;
-    auto p0 = pattern.add_node(1);
-    auto p1 = pattern.add_node(2);
+    const auto p0 = pattern.add_node(1);
+    const auto p1 = pattern.add_node(2);
     pattern.add_edge(p0, p1, 5);
 
     Graph<int, int, Undirected> target;
-    auto t0 = target.add_node(1);
-    auto t1 = target.add_node(2);
-    auto t2 = target.add_node(3);
+    const auto t0 = target.add_node(1);
+    const auto t1 = target.add_node(2);
+    const auto t2 = target.add_node(3);
     target.add_edge(t0, t1, 5);
     target.add_edge(t1, t2, 10);
 
-    auto matches = vf2_subgraph_isomorphism(
+    const auto matches = vf2_subgraph_isomorphism(
         pattern, target,
-        [](const int& a, const int& b) { return a == b; },
-        [](const int& a, const int& b) { return a == b; }
+        [](const int &a, const int &b) { return a == b; },
+        [](const int &a, const int &b) { return a == b; }
     );
 
     REQUIRE(!matches.empty());
@@ -1067,19 +1070,19 @@ TEST_CASE("[LiteGraph] VF2 with edge compatibility check", "[LiteGraph][VF2]") {
 
 TEST_CASE("[LiteGraph] VF2 no match due to edge incompatibility", "[LiteGraph][VF2]") {
     Graph<int, int, Undirected> pattern;
-    auto p0 = pattern.add_node(1);
-    auto p1 = pattern.add_node(2);
+    const auto p0 = pattern.add_node(1);
+    const auto p1 = pattern.add_node(2);
     pattern.add_edge(p0, p1, 5);
 
     Graph<int, int, Undirected> target;
-    auto t0 = target.add_node(1);
-    auto t1 = target.add_node(2);
+    const auto t0 = target.add_node(1);
+    const auto t1 = target.add_node(2);
     target.add_edge(t0, t1, 10);
 
-    auto matches = vf2_subgraph_isomorphism(
+    const auto matches = vf2_subgraph_isomorphism(
         pattern, target,
-        [](const int& a, const int& b) { return a == b; },
-        [](const int& a, const int& b) { return a == b; }
+        [](const int &a, const int &b) { return a == b; },
+        [](const int &a, const int &b) { return a == b; }
     );
 
     REQUIRE(matches.empty());
@@ -1087,47 +1090,47 @@ TEST_CASE("[LiteGraph] VF2 no match due to edge incompatibility", "[LiteGraph][V
 
 TEST_CASE("[LiteGraph] Bipartite matching with no perfect matching", "[LiteGraph][Matching]") {
     Graph<int, int, Undirected> g;
-    auto u0 = g.add_node(0);
-    auto u1 = g.add_node(1);
-    auto v0 = g.add_node(2);
+    const auto u0 = g.add_node(0);
+    const auto u1 = g.add_node(1);
+    const auto v0 = g.add_node(2);
 
     g.add_edge(u0, v0, 1);
     g.add_edge(u1, v0, 1);
 
-    auto matching = max_bipartite_matching(g);
+    const auto matching = max_bipartite_matching(g);
     REQUIRE(matching.size() == 1);
 }
 
 TEST_CASE("[LiteGraph] Bipartite matching on non-bipartite graph", "[LiteGraph][Matching]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
 
     g.add_edge(n0, n1, 1);
     g.add_edge(n1, n2, 1);
     g.add_edge(n2, n0, 1);
 
-    auto matching = max_bipartite_matching(g);
+    const auto matching = max_bipartite_matching(g);
     REQUIRE(matching.empty());
 }
 
 TEST_CASE("[LiteGraph] Graph coloring on bipartite graph", "[LiteGraph][Coloring]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
-    auto n3 = g.add_node(3);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
 
     g.add_edge(n0, n2, 1);
     g.add_edge(n0, n3, 1);
     g.add_edge(n1, n2, 1);
     g.add_edge(n1, n3, 1);
 
-    auto colors = greedy_graph_coloring(g);
+    const auto colors = greedy_graph_coloring(g);
 
     std::set<int> unique_colors;
-    for (const auto& color : colors) {
+    for (const auto &color: colors) {
         if (color) unique_colors.insert(*color);
     }
     REQUIRE(unique_colors.size() <= 2);
@@ -1135,11 +1138,11 @@ TEST_CASE("[LiteGraph] Graph coloring on bipartite graph", "[LiteGraph][Coloring
 
 TEST_CASE("[LiteGraph] Degree centrality on isolated nodes", "[LiteGraph][Centrality]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
 
-    auto centrality = degree_centrality(g);
+    const auto centrality = degree_centrality(g);
 
     REQUIRE(centrality[n0.value] == Catch::Approx(0.0));
     REQUIRE(centrality[n1.value] == Catch::Approx(0.0));
@@ -1166,16 +1169,16 @@ TEST_CASE("[LiteGraph] Closeness centrality on disconnected graph", "[LiteGraph]
 
 TEST_CASE("[LiteGraph] Betweenness centrality on path graph", "[LiteGraph][Centrality]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
-    auto n3 = g.add_node(3);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
 
     g.add_edge(n0, n1, 1);
     g.add_edge(n1, n2, 1);
     g.add_edge(n2, n3, 1);
 
-    auto centrality = betweenness_centrality(g);
+    const auto centrality = betweenness_centrality(g);
 
     REQUIRE(centrality[n1.value] > centrality[n0.value]);
     REQUIRE(centrality[n2.value] > centrality[n3.value]);
@@ -1183,47 +1186,47 @@ TEST_CASE("[LiteGraph] Betweenness centrality on path graph", "[LiteGraph][Centr
 
 TEST_CASE("[LiteGraph] Kruskal MST on disconnected graph", "[LiteGraph][MST]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
-    auto n3 = g.add_node(3);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
 
     g.add_edge(n0, n1, 1);
     g.add_edge(n2, n3, 2);
 
-    auto mst = kruskal_mst(g, [](const int& w) { return double(w); });
+    const auto mst = kruskal_mst(g, [](const int &w) { return double(w); });
 
     REQUIRE(mst.size() == 2);
 }
 
 TEST_CASE("[LiteGraph] Kruskal MST on disconnected graph - debug", "[LiteGraph][MST][.debug]") {
     Graph<int, int, Undirected> g;
-    auto n0 = g.add_node(0);
-    auto n1 = g.add_node(1);
-    auto n2 = g.add_node(2);
-    auto n3 = g.add_node(3);
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
 
     std::cout << "Node IDs: n0=" << n0.value << ", n1=" << n1.value
-              << ", n2=" << n2.value << ", n3=" << n3.value << "\n";
+            << ", n2=" << n2.value << ", n3=" << n3.value << "\n";
     std::cout << "Node capacity: " << g.node_capacity() << "\n";
     std::cout << "Node count: " << g.node_count() << "\n";
 
-    auto e0 = g.add_edge(n0, n1, 1);
-    auto e1 = g.add_edge(n2, n3, 2);
+    const auto e0 = g.add_edge(n0, n1, 1);
+    const auto e1 = g.add_edge(n2, n3, 2);
 
     std::cout << "Edge count: " << g.edge_count() << "\n";
     std::cout << "Edge e0: " << e0.value << " (" << g.get_edge(e0).from.value
-              << " -> " << g.get_edge(e0).to.value << ", weight=" << g.edge_data(e0) << ")\n";
+            << " -> " << g.get_edge(e0).to.value << ", weight=" << g.edge_data(e0) << ")\n";
     std::cout << "Edge e1: " << e1.value << " (" << g.get_edge(e1).from.value
-              << " -> " << g.get_edge(e1).to.value << ", weight=" << g.edge_data(e1) << ")\n";
+            << " -> " << g.get_edge(e1).to.value << ", weight=" << g.edge_data(e1) << ")\n";
 
-    auto mst = kruskal_mst(g, [](const int& w) { return double(w); });
+    const auto mst = kruskal_mst(g, [](const int &w) { return double(w); });
 
     std::cout << "MST size: " << mst.size() << "\n";
-    for (auto eid : mst) {
-        const auto& edge = g.get_edge(eid);
+    for (const auto eid: mst) {
+        const auto &edge = g.get_edge(eid);
         std::cout << "MST edge: " << edge.from.value << " -> " << edge.to.value
-                  << " (weight: " << g.edge_data(eid) << ")\n";
+                << " (weight: " << g.edge_data(eid) << ")\n";
     }
 
     REQUIRE(mst.size() == 2);
@@ -1231,7 +1234,8 @@ TEST_CASE("[LiteGraph] Kruskal MST on disconnected graph - debug", "[LiteGraph][
 
 // --- Additional LiteGraph tests for stable_toposort_kahn_by_index corner cases ---
 
-TEST_CASE("[LiteGraph] stable_toposort_kahn_by_index preserves insertion order for non-comparable indices", "[LiteGraph][Toposort][Stable][FIFO]") {
+TEST_CASE("[LiteGraph] stable_toposort_kahn_by_index preserves insertion order for non-comparable indices",
+          "[LiteGraph][Toposort][Stable][FIFO]") {
     // Define a simple non-comparable index type (no operator<, no std::hash)
     struct NC {
         int id;
@@ -1240,13 +1244,13 @@ TEST_CASE("[LiteGraph] stable_toposort_kahn_by_index preserves insertion order f
     };
 
     // Nodes in insertion order
-    std::vector<NC> nodes = { {0,0}, {1,1}, {2,2}, {3,3} };
+    std::vector<NC> nodes = {{0, 0}, {1, 1}, {2, 2}, {3, 3}};
 
     // Edges: nodes[0] -> nodes[2], nodes[1] -> nodes[2], nodes[2] -> nodes[3]
-    std::vector<std::pair<NC, NC>> edges = {
-        { nodes[0], nodes[2] },
-        { nodes[1], nodes[2] },
-        { nodes[2], nodes[3] }
+    std::vector<std::pair<NC, NC> > edges = {
+        {nodes[0], nodes[2]},
+        {nodes[1], nodes[2]},
+        {nodes[2], nodes[3]}
     };
 
     std::vector<NC> order;
@@ -1258,16 +1262,17 @@ TEST_CASE("[LiteGraph] stable_toposort_kahn_by_index preserves insertion order f
     REQUIRE(order.size() == nodes.size());
 
     // nodes[0] and nodes[1] have zero indegree initially; FIFO should preserve insertion order:
-    auto pos0 = std::find_if(order.begin(), order.end(), [&](const NC &x){ return x.id == 0; });
-    auto pos1 = std::find_if(order.begin(), order.end(), [&](const NC &x){ return x.id == 1; });
+    auto pos0 = std::find_if(order.begin(), order.end(), [&](const NC &x) { return x.id == 0; });
+    auto pos1 = std::find_if(order.begin(), order.end(), [&](const NC &x) { return x.id == 1; });
     REQUIRE(pos0 < pos1);
 }
 
-TEST_CASE("[LiteGraph] stable_toposort_kahn_by_index chooses smallest index when totally ordered", "[LiteGraph][Toposort][Stable][Ordered]") {
+TEST_CASE("[LiteGraph] stable_toposort_kahn_by_index chooses smallest index when totally ordered",
+          "[LiteGraph][Toposort][Stable][Ordered]") {
     // Use plain integers (totally ordered)
-    std::vector<std::size_t> nodes = { 10u, 5u, 7u, 20u }; // insertion order not sorted
+    std::vector<std::size_t> nodes = {10u, 5u, 7u, 20u}; // insertion order not sorted
     // Edges: 10->7, 5->7, 7->20
-    std::vector<std::pair<std::size_t, std::size_t>> edges = {
+    std::vector<std::pair<std::size_t, std::size_t> > edges = {
         {10u, 7u},
         {5u, 7u},
         {7u, 20u}
