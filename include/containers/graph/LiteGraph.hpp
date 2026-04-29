@@ -150,6 +150,16 @@ namespace litegraph {
         using directed_tag = Directedness;
         using IdMap = std::vector<std::optional<std::size_t> >;
 
+        // Explicitly defaulted special member functions.
+        // All six are defaulted so the compiler generates correct
+        // copy/move semantics for the vector members.
+        Graph()                            = default;
+        ~Graph()                           = default;
+        Graph(const Graph &)               = default;
+        Graph(Graph &&) noexcept           = default;
+        Graph &operator=(const Graph &)    = default;
+        Graph &operator=(Graph &&) noexcept = default;
+
         // C++23 deducing this for CRTP-like behavior without inheritance
         template<typename Self>
         constexpr auto get_directedness(this Self &&) -> Directedness { return {}; }
@@ -379,20 +389,20 @@ namespace litegraph {
         }
 
         // Basic validity check
-        [[nodiscard]] bool valid_node(NodeId nid) const {
+        [[nodiscard]] bool valid_node(NodeId nid) const noexcept {
             return nid.value < nodes_.size() && nodes_[nid.value].active;
         }
 
-        [[nodiscard]] bool valid_edge(EdgeId eid) const {
+        [[nodiscard]] bool valid_edge(EdgeId eid) const noexcept {
             return eid.value < edges_.size() && edges_[eid.value].active;
         }
 
-        // Size
-        [[nodiscard]] std::size_t node_count() const { return active_node_count_; }
-        [[nodiscard]] std::size_t edge_count() const { return active_edge_count_; }
-
-        [[nodiscard]] std::size_t node_capacity() const { return nodes_.size(); }
-        [[nodiscard]] std::size_t edge_capacity() const { return edges_.size(); }
+        // Size / capacity
+        [[nodiscard]] std::size_t node_count()    const noexcept { return active_node_count_; }
+        [[nodiscard]] std::size_t edge_count()    const noexcept { return active_edge_count_; }
+        [[nodiscard]] std::size_t node_capacity() const noexcept { return nodes_.size(); }
+        [[nodiscard]] std::size_t edge_capacity() const noexcept { return edges_.size(); }
+        [[nodiscard]] bool        empty()         const noexcept { return active_node_count_ == 0; }
 
         // Access edge object by EdgeId (const and non-const)
         Edge &get_edge(EdgeId eid) {
