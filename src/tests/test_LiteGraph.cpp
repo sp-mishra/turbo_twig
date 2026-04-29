@@ -2,6 +2,7 @@
 #include <catch_amalgamated.hpp>
 #include "containers/graph/LiteGraph.hpp"
 #include "containers/graph/LiteGraphAlgorithms.hpp"
+#include "containers/graph/LiteGraphHighway.hpp"
 
 using namespace litegraph;
 
@@ -479,6 +480,25 @@ TEST_CASE("[LiteGraph] CSR PageRank convergence respects max_iterations", "[Lite
 
     const auto pr = pagerank(csr, opts);
     REQUIRE(pr.iterations <= opts.max_iterations);
+}
+
+TEST_CASE("[LiteGraph] Optional Highway boundary compiles and remains opt-in", "[LiteGraph][Highway]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    g.add_edge(n0, n1, 1);
+
+    const auto csr = freeze_to_csr(g);
+    const auto pr = litegraph::highway::pagerank(csr);
+    REQUIRE(pr.ranks.size() == csr.node_count());
+
+#ifdef LITEGRAPH_ENABLE_HIGHWAY
+    REQUIRE(litegraph::highway::enabled());
+    REQUIRE(litegraph::highway::supported_targets_mask() != 0);
+#else
+    REQUIRE_FALSE(litegraph::highway::enabled());
+    REQUIRE(litegraph::highway::supported_targets_mask() == 0);
+#endif
 }
 
 TEST_CASE("[LiteGraph] BFS and DFS traversal", "[LiteGraph]") {
