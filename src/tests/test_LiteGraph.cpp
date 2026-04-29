@@ -574,6 +574,68 @@ TEST_CASE("[LiteGraph] Highway PageRank supports SIMD tail handling", "[LiteGrap
     }
 }
 
+TEST_CASE("[LiteGraph] Experimental Highway weighted CSR relaxation updates min distances", "[LiteGraph][Highway][Experimental]") {
+    Graph<int, double, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    g.add_edge(n0, n1, 1.0);
+    g.add_edge(n0, n2, 4.0);
+    g.add_edge(n0, n3, 2.5);
+
+    const auto csr = freeze_to_csr(g);
+    const auto c0 = csr.compact_index(n0).value();
+
+    std::vector<double> distances(csr.node_count(), std::numeric_limits<double>::infinity());
+    std::vector<std::optional<std::size_t> > pred(csr.node_count(), std::nullopt);
+    distances[c0] = 0.0;
+
+    const auto begin = csr.offsets()[c0];
+    const auto end = csr.offsets()[c0 + 1];
+
+    litegraph::highway::experimental::relax_weighted_edges_block(
+        csr, begin, end, distances[c0], distances, c0, &pred);
+
+    REQUIRE(distances[csr.compact_index(n1).value()] == Catch::Approx(1.0));
+    REQUIRE(distances[csr.compact_index(n2).value()] == Catch::Approx(4.0));
+    REQUIRE(distances[csr.compact_index(n3).value()] == Catch::Approx(2.5));
+    REQUIRE(pred[csr.compact_index(n1).value()].value() == c0);
+    REQUIRE(pred[csr.compact_index(n2).value()].value() == c0);
+    REQUIRE(pred[csr.compact_index(n3).value()].value() == c0);
+}
+
+TEST_CASE("[LiteGraph] Experimental Highway weighted CSR relaxation handles tail-sized blocks", "[LiteGraph][Highway][Experimental]") {
+    Graph<int, double, Directed> g;
+    std::vector<NodeId> n;
+    for (int i = 0; i < 6; ++i) n.push_back(g.add_node(i));
+
+    // Five outgoing edges from n0 to exercise non-multiple-of-lanes blocks on many targets.
+    g.add_edge(n[0], n[1], 1.0);
+    g.add_edge(n[0], n[2], 2.0);
+    g.add_edge(n[0], n[3], 3.0);
+    g.add_edge(n[0], n[4], 4.0);
+    g.add_edge(n[0], n[5], 5.0);
+
+    const auto csr = freeze_to_csr(g);
+    const auto c0 = csr.compact_index(n[0]).value();
+    const auto begin = csr.offsets()[c0];
+    const auto end = csr.offsets()[c0 + 1];
+
+    std::vector<double> distances(csr.node_count(), 1000.0);
+    distances[c0] = 0.0;
+
+    litegraph::highway::experimental::relax_weighted_edges_block(
+        csr, begin, end, 0.0, distances);
+
+    REQUIRE(distances[csr.compact_index(n[1]).value()] == Catch::Approx(1.0));
+    REQUIRE(distances[csr.compact_index(n[2]).value()] == Catch::Approx(2.0));
+    REQUIRE(distances[csr.compact_index(n[3]).value()] == Catch::Approx(3.0));
+    REQUIRE(distances[csr.compact_index(n[4]).value()] == Catch::Approx(4.0));
+    REQUIRE(distances[csr.compact_index(n[5]).value()] == Catch::Approx(5.0));
+}
+
 TEST_CASE("[LiteGraph] BFS and DFS traversal", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     auto n0 = g.add_node(1);

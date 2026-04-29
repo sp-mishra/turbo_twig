@@ -120,6 +120,72 @@ namespace litegraph::highway {
 #endif
     }
 
+    namespace experimental {
+        // Experimental helper for weighted-CSR block relaxation.
+        // Computes candidate = source_distance + weight[i] with SIMD where available,
+        // then applies scalar indirect min-updates on distance[target[i]].
+        template<typename EdgeT, DirectednessTag Directedness>
+            requires std::is_arithmetic_v<EdgeT>
+        void relax_weighted_edges_block(
+            const CsrGraph<EdgeT, Directedness> &g,
+            const std::size_t edge_begin,
+            const std::size_t edge_end,
+            const double source_distance,
+            std::vector<double> &distances,
+            const std::optional<std::size_t> source_compact = std::nullopt,
+            std::vector<std::optional<std::size_t> > *predecessors = nullptr
+        ) {
+            if (!g.has_edge_weights()) return;
+            if (edge_begin >= edge_end || edge_begin >= g.edge_count()) return;
+
+            const std::size_t clamped_end = std::min(edge_end, g.edge_count());
+            const auto &targets = g.targets();
+            const auto weights = g.edge_weights();
+
+#ifdef LITEGRAPH_ENABLE_HIGHWAY
+            std::vector<double> candidates(clamped_end - edge_begin);
+            {
+                const HWY_FULL(double) d;
+                const std::size_t lanes = hwy::Lanes(d);
+                const auto vs = hwy::Set(d, source_distance);
+
+                std::size_t j = 0;
+                for (; j + lanes <= candidates.size(); j += lanes) {
+                    const auto w = hwy::LoadU(d, weights.data() + edge_begin + j);
+                    hwy::StoreU(hwy::Add(vs, w), d, candidates.data() + j);
+                }
+                for (; j < candidates.size(); ++j) {
+                    candidates[j] = source_distance + weights[edge_begin + j];
+                }
+            }
+
+            for (std::size_t j = 0; j < candidates.size(); ++j) {
+                const std::size_t idx = edge_begin + j;
+                const std::size_t target = targets[idx].value;
+                if (target >= distances.size()) continue;
+                if (candidates[j] < distances[target]) {
+                    distances[target] = candidates[j];
+                    if (predecessors && source_compact) {
+                        (*predecessors)[target] = *source_compact;
+                    }
+                }
+            }
+#else
+            for (std::size_t idx = edge_begin; idx < clamped_end; ++idx) {
+                const std::size_t target = targets[idx].value;
+                if (target >= distances.size()) continue;
+                const double candidate = source_distance + weights[idx];
+                if (candidate < distances[target]) {
+                    distances[target] = candidate;
+                    if (predecessors && source_compact) {
+                        (*predecessors)[target] = *source_compact;
+                    }
+                }
+            }
+#endif
+        }
+    } // namespace experimental
+
     // Optional boundary: callers can include this header and opt-in to Highway
     // without changing the core serial algorithm API.
     template<typename EdgeT, DirectednessTag Directedness>

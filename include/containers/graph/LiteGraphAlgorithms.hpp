@@ -87,6 +87,13 @@ namespace litegraph {
             return std::span<const EdgeT>(edge_data_).subspan(begin, end - begin);
         }
 
+        [[nodiscard]] bool has_edge_weights() const noexcept { return edge_weights_enabled_; }
+
+        template<typename T = EdgeT>
+        [[nodiscard]] std::enable_if_t<std::is_arithmetic_v<T>, std::span<const double> > edge_weights() const {
+            return edge_weights_;
+        }
+
         [[nodiscard]] const std::vector<std::size_t> &offsets() const noexcept { return offsets_; }
         [[nodiscard]] const std::vector<NodeId> &targets() const noexcept { return targets_; }
 
@@ -95,6 +102,8 @@ namespace litegraph {
         std::vector<NodeId> targets_; // compact target node indices encoded as NodeId{compact_index}
         std::vector<EdgeId> edge_ids_;
         std::vector<EdgeT> edge_data_;
+        std::vector<double> edge_weights_;
+        bool edge_weights_enabled_ = false;
         std::vector<std::optional<std::size_t>> original_to_compact_;
         std::vector<NodeId> compact_to_original_;
 
@@ -133,6 +142,10 @@ namespace litegraph {
         csr.targets_.resize(arc_count);
         csr.edge_ids_.resize(arc_count);
         csr.edge_data_.resize(arc_count);
+        if constexpr (std::is_arithmetic_v<EdgeT>) {
+            csr.edge_weights_enabled_ = true;
+            csr.edge_weights_.resize(arc_count);
+        }
 
         std::vector<std::size_t> cursor = csr.offsets_;
 
@@ -150,6 +163,9 @@ namespace litegraph {
                 csr.targets_[pos] = NodeId{*compact_target};
                 csr.edge_ids_[pos] = eid;
                 csr.edge_data_[pos] = edge.data;
+                if constexpr (std::is_arithmetic_v<EdgeT>) {
+                    csr.edge_weights_[pos] = static_cast<double>(edge.data);
+                }
             }
         }
 
