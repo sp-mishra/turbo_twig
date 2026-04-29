@@ -351,7 +351,11 @@ namespace litegraph {
             return edges_[eid.value].data;
         }
 
-        // Get edges for a node
+        // Get edges for a node.
+        // WARNING: The returned range captures `this` and a reference to the internal
+        // adjacency vector. Mutating the graph (adding/removing nodes or edges) while
+        // iterating the result is undefined behavior. If mutation during iteration is
+        // needed, materialize the range into a std::vector<EdgeId> first.
         auto out_edges(NodeId nid) const {
             const auto &vec = nodes_[nid.value].out_edges;
             return vec | std::views::filter([this](EdgeId eid) { return edges_[eid.value].active; });
