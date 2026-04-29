@@ -80,8 +80,8 @@ namespace litegraph {
         using DistT = double;
         constexpr DistT INF = std::numeric_limits<DistT>::infinity();
 
-        std::vector<DistT> dist(g.node_count(), INF);
-        std::vector<std::optional<NodeId> > pred(g.node_count());
+        std::vector<DistT> dist(g.node_capacity(), INF);
+        std::vector<std::optional<NodeId> > pred(g.node_capacity());
         using QEntry = std::pair<DistT, NodeId>;
         auto cmp = [](const QEntry &a, const QEntry &b) { return a.first > b.first; };
         std::priority_queue<QEntry, std::vector<QEntry>, decltype(cmp)> pq(cmp);
@@ -909,11 +909,11 @@ namespace litegraph {
         std::vector low(node_cap, -1);
         std::vector on_stack(node_cap, false);
         std::vector<std::vector<NodeId> > sccs;
+        std::stack<NodeId> st;
+        int time = 0;
 
         for (const auto &[nid_val, node]: g.nodes()) {
             if (NodeId u{nid_val}; disc[u.value] == -1) {
-                std::stack<NodeId> st;
-                int time = 0;
                 detail::tarjan_scc_util(g, u, time, disc, low, st, on_stack, sccs);
             }
         }
