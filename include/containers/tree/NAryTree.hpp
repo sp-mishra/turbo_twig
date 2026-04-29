@@ -20,8 +20,114 @@
 
 // Google Highway for portable SIMD operations
 #include <hwy/highway.h>
+#include <hwy/aligned_allocator.h>
 
-// Memory pool for optimized node allocation
+// ============================================================================
+// SIMD Operations using Google Highway for tree operations
+// ============================================================================
+namespace tree_simd {
+
+// SIMD-accelerated search for node ID in an array
+// Returns index of first match or -1 if not found
+inline int find_node_id_simd(const uint64_t* ids, size_t count, uint64_t target) {
+    namespace hn = hwy::HWY_NAMESPACE;
+    const hn::ScalableTag<uint64_t> d;
+    const size_t N = hn::Lanes(d);
+    
+    if (count == 0) return -1;
+    
+    const auto target_vec = hn::Set(d, target);
+    
+    size_t i = 0;
+    for (; i + N <= count; i += N) {
+        const auto data = hn::LoadU(d, ids + i);
+        const auto mask = hn::Eq(data, target_vec);
+        if (!hn::AllFalse(d, mask)) {
+            // Found match, scan for exact position
+            for (size_t j = i; j < i + N && j < count; ++j) {
+                if (ids[j] == target) return static_cast<int>(j);
+            }
+        }
+    }
+    
+    // Handle remaining elements
+    for (; i < count; ++i) {
+        if (ids[i] == target) return static_cast<int>(i);
+    }
+    
+    return -1;
+}
+
+// SIMD-accelerated sum for statistics computation (uses uint64_t)
+inline uint64_t sum_simd(const uint64_t* data, size_t count) {
+    namespace hn = hwy::HWY_NAMESPACE;
+    const hn::ScalableTag<uint64_t> d;
+    const size_t N = hn::Lanes(d);
+    
+    auto sum_vec = hn::Zero(d);
+    size_t i = 0;
+    
+    for (; i + N <= count; i += N) {
+        const auto v = hn::LoadU(d, data + i);
+        sum_vec = hn::Add(sum_vec, v);
+    }
+    
+    uint64_t result = hn::ReduceSum(d, sum_vec);
+    
+    for (; i < count; ++i) {
+        result += data[i];
+    }
+    
+    return result;
+}
+
+// SIMD-accelerated max finding for tree statistics (uses uint64_t)
+inline uint64_t max_simd(const uint64_t* data, size_t count) {
+    if (count == 0) return 0;
+    
+    namespace hn = hwy::HWY_NAMESPACE;
+    const hn::ScalableTag<uint64_t> d;
+    const size_t N = hn::Lanes(d);
+    
+    auto max_vec = hn::Set(d, data[0]);
+    size_t i = 0;
+    
+    for (; i + N <= count; i += N) {
+        const auto v = hn::LoadU(d, data + i);
+        max_vec = hn::Max(max_vec, v);
+    }
+    
+    uint64_t result = hn::ReduceMax(d, max_vec);
+    
+    for (; i < count; ++i) {
+        result = std::max(result, data[i]);
+    }
+    
+    return result;
+}
+
+// Convenience wrappers that accept size_t and cast internally
+inline int find_node_id(const size_t* ids, size_t count, size_t target) {
+    // On most 64-bit platforms, size_t == uint64_t
+    static_assert(sizeof(size_t) == sizeof(uint64_t), "size_t must be 64-bit");
+    return find_node_id_simd(reinterpret_cast<const uint64_t*>(ids), count, static_cast<uint64_t>(target));
+}
+
+inline size_t sum(const size_t* data, size_t count) {
+    static_assert(sizeof(size_t) == sizeof(uint64_t), "size_t must be 64-bit");
+    return static_cast<size_t>(sum_simd(reinterpret_cast<const uint64_t*>(data), count));
+}
+
+inline size_t max(const size_t* data, size_t count) {
+    static_assert(sizeof(size_t) == sizeof(uint64_t), "size_t must be 64-bit");
+    return static_cast<size_t>(max_simd(reinterpret_cast<const uint64_t*>(data), count));
+}
+
+} // namespace tree_simd
+
+// ============================================================================
+// Memory pool for optimized node allocation with cache-line alignment
+// ============================================================================
 template<typename T>
 class NodeMemoryPool {
     static constexpr size_t INITIAL_POOL_SIZE = 1024;
@@ -182,19 +288,31 @@ public:
         Container<std::unique_ptr<TreeNode> > children;
         TreeNode *parent = nullptr;
         size_t node_id = 0; // Automatic unique node id
+        size_t sibling_index = 0; // Index in parent's children for O(1) sibling navigation
 
-        explicit constexpr TreeNode(T value, Metadata meta, TreeNode *p, const size_t id)
-            : data(std::move(value)), metadata(std::move(meta)), parent(p), node_id(id) {
+        explicit constexpr TreeNode(T value, Metadata meta, TreeNode *p, const size_t id, size_t sib_idx = 0)
+            : data(std::move(value)), metadata(std::move(meta)), parent(p), node_id(id), sibling_index(sib_idx) {
         }
 
         template<typename... Args>
         constexpr TreeNode(TreeNode *p, Metadata meta, const size_t id, Args &&... args)
-            : data(std::forward<Args>(args)...), metadata(std::move(meta)), parent(p), node_id(id) {
+            : data(std::forward<Args>(args)...), metadata(std::move(meta)), parent(p), node_id(id), sibling_index(0) {
         }
 
-        [[nodiscard]] constexpr bool is_leaf() const { return children.empty(); }
-        [[nodiscard]] constexpr size_t child_count() const { return children.size(); }
-        [[nodiscard]] constexpr bool has_parent() const { return parent != nullptr; }
+        [[nodiscard]] constexpr bool is_leaf() const noexcept { return children.empty(); }
+        [[nodiscard]] constexpr size_t child_count() const noexcept { return children.size(); }
+        [[nodiscard]] constexpr bool has_parent() const noexcept { return parent != nullptr; }
+
+        // O(1) sibling navigation using stored index
+        [[nodiscard]] TreeNode* next_sibling() const noexcept {
+            if (!parent || sibling_index + 1 >= parent->children.size()) return nullptr;
+            return parent->children[sibling_index + 1].get();
+        }
+        
+        [[nodiscard]] TreeNode* prev_sibling() const noexcept {
+            if (!parent || sibling_index == 0) return nullptr;
+            return parent->children[sibling_index - 1].get();
+        }
 
         // Structural equality
         constexpr bool operator==(const TreeNode &other) const {
