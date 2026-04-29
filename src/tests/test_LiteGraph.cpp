@@ -501,6 +501,79 @@ TEST_CASE("[LiteGraph] Optional Highway boundary compiles and remains opt-in", "
 #endif
 }
 
+TEST_CASE("[LiteGraph] Highway PageRank matches serial PageRank", "[LiteGraph][Highway][PageRank]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n0, 1);
+    g.add_edge(n2, n3, 1);
+
+    const auto csr = freeze_to_csr(g);
+    CsrPageRankOptions opts;
+    opts.max_iterations = 250;
+    opts.tolerance = 1e-12;
+
+    const auto serial = litegraph::pagerank(csr, opts);
+    const auto simd_boundary = litegraph::highway::pagerank(csr, opts);
+
+    REQUIRE(serial.ranks.size() == simd_boundary.ranks.size());
+    for (std::size_t i = 0; i < serial.ranks.size(); ++i) {
+        REQUIRE(simd_boundary.ranks[i] == Catch::Approx(serial.ranks[i]).margin(1e-9));
+    }
+}
+
+TEST_CASE("[LiteGraph] Highway PageRank handles dangling nodes", "[LiteGraph][Highway][PageRank]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+
+    g.add_edge(n0, n1, 1); // n1 and n2 are dangling
+
+    const auto csr = freeze_to_csr(g);
+    const auto simd_boundary = litegraph::highway::pagerank(csr);
+
+    REQUIRE(simd_boundary.ranks.size() == csr.node_count());
+    double sum = 0.0;
+    for (const double r : simd_boundary.ranks) {
+        REQUIRE(r > 0.0);
+        sum += r;
+    }
+    REQUIRE(sum == Catch::Approx(1.0).margin(1e-9));
+}
+
+TEST_CASE("[LiteGraph] Highway PageRank supports SIMD tail handling", "[LiteGraph][Highway][PageRank]") {
+    Graph<int, int, Directed> g;
+    // 5 nodes intentionally chosen to exercise non-lane-aligned tails on common SIMD widths.
+    std::vector<NodeId> nodes;
+    for (int i = 0; i < 5; ++i) nodes.push_back(g.add_node(i));
+
+    g.add_edge(nodes[0], nodes[1], 1);
+    g.add_edge(nodes[1], nodes[2], 1);
+    g.add_edge(nodes[2], nodes[3], 1);
+    g.add_edge(nodes[3], nodes[4], 1);
+    g.add_edge(nodes[4], nodes[0], 1);
+
+    const auto csr = freeze_to_csr(g);
+    CsrPageRankOptions opts;
+    opts.max_iterations = 200;
+    opts.tolerance = 1e-12;
+
+    const auto serial = litegraph::pagerank(csr, opts);
+    const auto simd_boundary = litegraph::highway::pagerank(csr, opts);
+
+    REQUIRE(serial.ranks.size() == 5);
+    REQUIRE(simd_boundary.ranks.size() == 5);
+    for (std::size_t i = 0; i < 5; ++i) {
+        REQUIRE(simd_boundary.ranks[i] == Catch::Approx(serial.ranks[i]).margin(1e-9));
+    }
+}
+
 TEST_CASE("[LiteGraph] BFS and DFS traversal", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     auto n0 = g.add_node(1);
