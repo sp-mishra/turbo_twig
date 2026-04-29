@@ -1805,6 +1805,76 @@ TEST_CASE("[LiteGraph] parallel_dijkstra correctness with sparse node IDs", "[Li
 }
 
 // ============================================================================
+// Tests for graph factory functions: make_directed_graph / make_undirected_graph
+// ============================================================================
+
+TEST_CASE("[LiteGraph] make_directed_graph<>() creates usable default graph", "[LiteGraph][Factory]") {
+    auto g = make_directed_graph<>();
+    static_assert(std::is_same_v<decltype(g)::directed_tag, Directed>,
+                  "make_directed_graph must produce a directed graph");
+    static_assert(std::is_same_v<decltype(g)::node_type, std::monostate>,
+                  "Default node type must be std::monostate");
+    static_assert(std::is_same_v<decltype(g)::edge_type, std::monostate>,
+                  "Default edge type must be std::monostate");
+
+    const auto n0 = g.add_node();
+    const auto n1 = g.add_node();
+    const auto e0 = g.add_edge(n0, n1);
+    REQUIRE(g.node_count() == 2);
+    REQUIRE(g.edge_count() == 1);
+}
+
+TEST_CASE("[LiteGraph] make_directed_graph<int, double>() creates typed directed graph", "[LiteGraph][Factory]") {
+    auto g = make_directed_graph<int, double>();
+    static_assert(std::is_same_v<decltype(g)::directed_tag, Directed>);
+    static_assert(std::is_same_v<decltype(g)::node_type, int>);
+    static_assert(std::is_same_v<decltype(g)::edge_type, double>);
+
+    const auto n0 = g.add_node(42);
+    const auto n1 = g.add_node(99);
+    const auto e0 = g.add_edge(n0, n1, 3.14);
+    REQUIRE(g.node_count() == 2);
+    REQUIRE(g.edge_count() == 1);
+    REQUIRE(g.node_data(n0) == 42);
+    REQUIRE(g.node_data(n1) == 99);
+    REQUIRE(g.edge_data(e0) == Catch::Approx(3.14));
+}
+
+TEST_CASE("[LiteGraph] make_undirected_graph<>() creates usable default graph", "[LiteGraph][Factory]") {
+    auto g = make_undirected_graph<>();
+    static_assert(std::is_same_v<decltype(g)::directed_tag, Undirected>,
+                  "make_undirected_graph must produce an undirected graph");
+    static_assert(std::is_same_v<decltype(g)::node_type, std::monostate>);
+    static_assert(std::is_same_v<decltype(g)::edge_type, std::monostate>);
+
+    const auto n0 = g.add_node();
+    const auto n1 = g.add_node();
+    const auto e0 = g.add_edge(n0, n1);
+    REQUIRE(g.node_count() == 2);
+    REQUIRE(g.edge_count() == 1);
+    // Undirected: both nodes should have degree 1
+    REQUIRE(g.degree(n0) == 1);
+    REQUIRE(g.degree(n1) == 1);
+}
+
+TEST_CASE("[LiteGraph] make_undirected_graph<int, double>() creates typed undirected graph", "[LiteGraph][Factory]") {
+    auto g = make_undirected_graph<int, double>();
+    static_assert(std::is_same_v<decltype(g)::directed_tag, Undirected>);
+    static_assert(std::is_same_v<decltype(g)::node_type, int>);
+    static_assert(std::is_same_v<decltype(g)::edge_type, double>);
+
+    const auto n0 = g.add_node(10);
+    const auto n1 = g.add_node(20);
+    const auto n2 = g.add_node(30);
+    g.add_edge(n0, n1, 1.5);
+    g.add_edge(n1, n2, 2.5);
+    REQUIRE(g.node_count() == 3);
+    REQUIRE(g.edge_count() == 2);
+    REQUIRE(g.node_data(n0) == 10);
+    REQUIRE(g.degree(n1) == 2); // connected to both n0 and n2
+}
+
+// ============================================================================
 // Regression test: as_node_matrix has been removed (UB fix).
 //
 // The former as_node_matrix used reinterpret_cast<T*>(nodes_.data()) to return

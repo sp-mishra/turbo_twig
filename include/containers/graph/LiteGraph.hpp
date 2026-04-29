@@ -562,12 +562,12 @@ namespace litegraph {
 
     // Graph factory functions
     template<typename NodeT = std::monostate, typename EdgeT = std::monostate>
-    auto make_directed_graph() {
+    auto make_directed_graph() -> Graph<NodeT, EdgeT, Directed> {
         return Graph<NodeT, EdgeT, Directed>{};
     }
 
     template<typename NodeT = std::monostate, typename EdgeT = std::monostate>
-    auto make_undirected_graph() {
+    auto make_undirected_graph() -> Graph<NodeT, EdgeT, Undirected> {
         return Graph<NodeT, EdgeT, Undirected>{};
     }
 
