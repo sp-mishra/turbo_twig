@@ -28,6 +28,62 @@ TEST_CASE("[LiteGraph] Basic node/edge operations", "[LiteGraph]") {
     REQUIRE(g.node_count() == 2);
 }
 
+TEST_CASE("[LiteGraph] active_node_ids and active_edge_ids exclude removed elements", "[LiteGraph][ActiveIds]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(10);
+    const auto n1 = g.add_node(20);
+    const auto n2 = g.add_node(30);
+    const auto n3 = g.add_node(40);
+
+    const auto e0 = g.add_edge(n0, n1, 1);
+    const auto e1 = g.add_edge(n1, n2, 2);
+    const auto e2 = g.add_edge(n2, n3, 3);
+
+    g.remove_edge(e1);
+    g.remove_node(n2); // also deactivates e2
+
+    std::vector<std::size_t> active_nodes;
+    for (const auto nid : g.active_node_ids()) {
+        REQUIRE(g.valid_node(nid));
+        active_nodes.push_back(nid.value);
+    }
+
+    std::vector<std::size_t> active_edges;
+    for (const auto eid : g.active_edge_ids()) {
+        REQUIRE(g.valid_edge(eid));
+        active_edges.push_back(eid.value);
+    }
+
+    REQUIRE(active_nodes == std::vector<std::size_t>{n0.value, n1.value, n3.value});
+    REQUIRE(active_edges == std::vector<std::size_t>{e0.value});
+    REQUIRE(g.node_capacity() > g.node_count());
+    REQUIRE(g.edge_capacity() > g.edge_count());
+    REQUIRE_FALSE(g.valid_edge(e1));
+    REQUIRE_FALSE(g.valid_edge(e2));
+}
+
+TEST_CASE("[LiteGraph] active ID helpers include all IDs before removals", "[LiteGraph][ActiveIds]") {
+    Graph<int, int, Undirected> g;
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
+    const auto n2 = g.add_node(3);
+    const auto e0 = g.add_edge(n0, n1, 11);
+    const auto e1 = g.add_edge(n1, n2, 22);
+
+    std::vector<std::size_t> active_nodes;
+    for (const auto nid : g.active_node_ids()) {
+        active_nodes.push_back(nid.value);
+    }
+
+    std::vector<std::size_t> active_edges;
+    for (const auto eid : g.active_edge_ids()) {
+        active_edges.push_back(eid.value);
+    }
+
+    REQUIRE(active_nodes == std::vector<std::size_t>{n0.value, n1.value, n2.value});
+    REQUIRE(active_edges == std::vector<std::size_t>{e0.value, e1.value});
+}
+
 TEST_CASE("[LiteGraph] BFS and DFS traversal", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     auto n0 = g.add_node(1);

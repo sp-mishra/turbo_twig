@@ -311,6 +311,20 @@ namespace litegraph {
                    });
         }
 
+        // Returns a lazy range of active node IDs.
+        auto active_node_ids() const {
+            return std::views::iota(std::size_t{0}, nodes_.size())
+                   | std::views::filter([this](std::size_t i) { return nodes_[i].active; })
+                   | std::views::transform([](std::size_t i) { return NodeId{i}; });
+        }
+
+        // Returns a lazy range of active edge IDs.
+        auto active_edge_ids() const {
+            return std::views::iota(std::size_t{0}, edges_.size())
+                   | std::views::filter([this](std::size_t i) { return edges_[i].active; })
+                   | std::views::transform([](std::size_t i) { return EdgeId{i}; });
+        }
+
         // Accessors
         NodeT &node_data(NodeId nid) {
             if (!valid_node(nid))
