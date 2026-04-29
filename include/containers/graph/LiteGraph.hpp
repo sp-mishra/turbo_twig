@@ -285,7 +285,7 @@ namespace litegraph {
                     std::vector<EdgeId> new_vec;
                     for (const auto [value]: vec)
                         if (value < edge_id_map.size() && edge_id_map[value])
-                            new_vec.push_back(EdgeId{*edge_id_map[value]});
+                            new_vec.emplace_back(*edge_id_map[value]);
                     vec = std::move(new_vec);
                 };
                 remap(node.out_edges);

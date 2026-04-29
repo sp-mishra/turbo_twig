@@ -19,7 +19,6 @@
 #include <span>
 #include <deque>
 #include <cstdint>
-#include <cmath>
 
 namespace litegraph {
     // Additional error types for algorithms
@@ -66,7 +65,7 @@ namespace litegraph {
             }
             const std::size_t begin = offsets_[compact_node_index];
             const std::size_t end = offsets_[compact_node_index + 1];
-            return std::span<const NodeId>(targets_).subspan(begin, end - begin);
+            return std::span(targets_).subspan(begin, end - begin);
         }
 
         [[nodiscard]] std::span<const EdgeId> out_edges(std::size_t compact_node_index) const {
@@ -75,7 +74,7 @@ namespace litegraph {
             }
             const std::size_t begin = offsets_[compact_node_index];
             const std::size_t end = offsets_[compact_node_index + 1];
-            return std::span<const EdgeId>(edge_ids_).subspan(begin, end - begin);
+            return std::span(edge_ids_).subspan(begin, end - begin);
         }
 
         [[nodiscard]] std::span<const EdgeT> out_edge_data(std::size_t compact_node_index) const {
@@ -253,8 +252,8 @@ namespace litegraph {
         const auto &offsets = g.offsets();
         const auto &targets = g.targets();
 
-        std::vector<double> rank(n, 1.0 / static_cast<double>(n));
-        std::vector<double> next_rank(n, 0.0);
+        std::vector rank(n, 1.0 / static_cast<double>(n));
+        std::vector next_rank(n, 0.0);
 
         CsrPageRankResult result;
         result.ranks = rank;
@@ -1188,7 +1187,7 @@ namespace litegraph {
         const size_t node_cap = g.node_capacity();
         std::vector disc(node_cap, -1);
         std::vector low(node_cap, -1);
-        std::vector<std::uint8_t> on_stack(node_cap, static_cast<std::uint8_t>(0));
+        std::vector<std::uint8_t> on_stack(node_cap, 0);
         std::vector<std::vector<NodeId> > sccs;
         std::stack<NodeId> st;
         int time = 0;
