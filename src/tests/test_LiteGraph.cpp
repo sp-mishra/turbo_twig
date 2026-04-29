@@ -84,6 +84,89 @@ TEST_CASE("[LiteGraph] active ID helpers include all IDs before removals", "[Lit
     REQUIRE(active_edges == std::vector<std::size_t>{e0.value, e1.value});
 }
 
+TEST_CASE("[LiteGraph] for_each_out_edge traverses directed outgoing edges", "[LiteGraph][HotPathTraversal]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+
+    const auto e0 = g.add_edge(n0, n1, 10);
+    const auto e1 = g.add_edge(n0, n2, 20);
+
+    std::vector<std::size_t> seen_edges;
+    std::vector<std::size_t> seen_targets;
+
+    g.for_each_out_edge(n0, [&](EdgeId eid, NodeId src, NodeId dst, int &w) {
+        REQUIRE(src.value == n0.value);
+        seen_edges.push_back(eid.value);
+        seen_targets.push_back(dst.value);
+        w += 1; // non-const traversal can mutate edge payload
+    });
+
+    std::ranges::sort(seen_edges);
+    std::ranges::sort(seen_targets);
+    REQUIRE(seen_edges == std::vector<std::size_t>{e0.value, e1.value});
+    REQUIRE(seen_targets == std::vector<std::size_t>{n1.value, n2.value});
+    REQUIRE(g.edge_data(e0) == 11);
+    REQUIRE(g.edge_data(e1) == 21);
+}
+
+TEST_CASE("[LiteGraph] for_each_in_edge traverses directed incoming edges", "[LiteGraph][HotPathTraversal]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+
+    const auto e0 = g.add_edge(n0, n2, 5);
+    const auto e1 = g.add_edge(n1, n2, 7);
+
+    const Graph<int, int, Directed> &cg = g;
+    std::vector<std::size_t> seen_edges;
+    std::vector<std::size_t> seen_sources;
+    int weight_sum = 0;
+
+    cg.for_each_in_edge(n2, [&](EdgeId eid, NodeId src, NodeId dst, const int &w) {
+        REQUIRE(dst.value == n2.value);
+        seen_edges.push_back(eid.value);
+        seen_sources.push_back(src.value);
+        weight_sum += w;
+    });
+
+    std::ranges::sort(seen_edges);
+    std::ranges::sort(seen_sources);
+    REQUIRE(seen_edges == std::vector<std::size_t>{e0.value, e1.value});
+    REQUIRE(seen_sources == std::vector<std::size_t>{n0.value, n1.value});
+    REQUIRE(weight_sum == 12);
+}
+
+TEST_CASE("[LiteGraph] for_each_neighbor traverses undirected neighbors and skips inactive edges", "[LiteGraph][HotPathTraversal]") {
+    Graph<int, int, Undirected> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+
+    const auto e0 = g.add_edge(n0, n1, 3);
+    const auto e1 = g.add_edge(n0, n2, 4);
+
+    g.remove_edge(e1);
+
+    std::vector<std::size_t> seen_edges;
+    std::vector<std::size_t> seen_targets;
+    int weight_sum = 0;
+
+    const auto &cg = g;
+    cg.for_each_neighbor(n0, [&](EdgeId eid, NodeId src, NodeId dst, const int &w) {
+        REQUIRE(src.value == n0.value);
+        seen_edges.push_back(eid.value);
+        seen_targets.push_back(dst.value);
+        weight_sum += w;
+    });
+
+    REQUIRE(seen_edges == std::vector<std::size_t>{e0.value});
+    REQUIRE(seen_targets == std::vector<std::size_t>{n1.value});
+    REQUIRE(weight_sum == 3);
+}
+
 TEST_CASE("[LiteGraph] BFS and DFS traversal", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     auto n0 = g.add_node(1);

@@ -362,6 +362,32 @@ namespace litegraph {
             return vec | std::views::filter([this](EdgeId eid) { return edges_[eid.value].active; });
         }
 
+        // Callback-based hot-path traversal over active outgoing edges.
+        // Callback signature: fn(EdgeId eid, NodeId source, NodeId target, EdgeDataRef data)
+        template<typename Fn>
+        void for_each_out_edge(NodeId nid, Fn &&fn) {
+            if (!valid_node(nid)) return;
+            for (EdgeId eid : nodes_[nid.value].out_edges) {
+                if (!valid_edge(eid)) continue;
+                auto &edge = edges_[eid.value];
+                const NodeId target = edge.from.value == nid.value ? edge.to : edge.from;
+                if (!valid_node(target)) continue;
+                fn(eid, nid, target, edge.data);
+            }
+        }
+
+        template<typename Fn>
+        void for_each_out_edge(NodeId nid, Fn &&fn) const {
+            if (!valid_node(nid)) return;
+            for (EdgeId eid : nodes_[nid.value].out_edges) {
+                if (!valid_edge(eid)) continue;
+                const auto &edge = edges_[eid.value];
+                const NodeId target = edge.from.value == nid.value ? edge.to : edge.from;
+                if (!valid_node(target)) continue;
+                fn(eid, nid, target, edge.data);
+            }
+        }
+
         // Returns a lazy, non-owning filtered range over the active incoming EdgeIds
         // of the given node (directed graphs only).
         //
@@ -372,6 +398,32 @@ namespace litegraph {
             static_assert(std::is_same_v<Directedness, Directed>, "in_edges() only for directed graphs");
             const auto &vec = nodes_[nid.value].in_edges;
             return vec | std::views::filter([this](EdgeId eid) { return edges_[eid.value].active; });
+        }
+
+        // Callback-based hot-path traversal over active incoming edges (directed graphs only).
+        // Callback signature: fn(EdgeId eid, NodeId source, NodeId target, EdgeDataRef data)
+        template<typename Fn>
+        void for_each_in_edge(NodeId nid, Fn &&fn) {
+            static_assert(std::is_same_v<Directedness, Directed>, "for_each_in_edge() only for directed graphs");
+            if (!valid_node(nid)) return;
+            for (EdgeId eid : nodes_[nid.value].in_edges) {
+                if (!valid_edge(eid)) continue;
+                auto &edge = edges_[eid.value];
+                if (!valid_node(edge.from)) continue;
+                fn(eid, edge.from, nid, edge.data);
+            }
+        }
+
+        template<typename Fn>
+        void for_each_in_edge(NodeId nid, Fn &&fn) const {
+            static_assert(std::is_same_v<Directedness, Directed>, "for_each_in_edge() only for directed graphs");
+            if (!valid_node(nid)) return;
+            for (EdgeId eid : nodes_[nid.value].in_edges) {
+                if (!valid_edge(eid)) continue;
+                const auto &edge = edges_[eid.value];
+                if (!valid_node(edge.from)) continue;
+                fn(eid, edge.from, nid, edge.data);
+            }
         }
 
         // Returns a lazy, non-owning range of NodeIds reachable from nid via active
@@ -388,6 +440,18 @@ namespace litegraph {
                        // Otherwise, the neighbor is 'from'.
                        return edge.from.value == nid.value ? edge.to : edge.from;
                    });
+        }
+
+        // Callback-based hot-path traversal over active neighbors.
+        // Callback signature: fn(EdgeId eid, NodeId source, NodeId target, EdgeDataRef data)
+        template<typename Fn>
+        void for_each_neighbor(NodeId nid, Fn &&fn) {
+            for_each_out_edge(nid, std::forward<Fn>(fn));
+        }
+
+        template<typename Fn>
+        void for_each_neighbor(NodeId nid, Fn &&fn) const {
+            for_each_out_edge(nid, std::forward<Fn>(fn));
         }
 
         // Safe materialising helpers — these copy the current active edge IDs into an
