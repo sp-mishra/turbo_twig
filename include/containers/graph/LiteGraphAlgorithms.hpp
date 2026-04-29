@@ -340,10 +340,8 @@ namespace litegraph {
             }
 
             // The main recursive matching function.
-            // candidate_buf is a reusable scratch buffer passed through all recursive
-            // calls to avoid repeated heap allocation in generate_candidate_pairs.
-            void match(std::vector<std::unordered_map<std::size_t, std::size_t> > &results,
-                       std::vector<std::pair<NodeId, NodeId> > &candidate_buf) {
+            // Candidate vectors are reused per depth level to avoid per-call allocations.
+            void match(std::vector<std::unordered_map<std::size_t, std::size_t> > &results) {
                 // If the mapping is complete, we found a solution
                 if (core_len == g1.node_count()) {
                     // Store the current mapping as a result
@@ -357,18 +355,19 @@ namespace litegraph {
                     return;
                 }
 
-                // Fill the reusable buffer with candidate pairs for this recursion level.
-                // We copy the buffer into a local snapshot so that nested recursive calls
-                // can safely reuse candidate_buf without corrupting the current loop.
-                generate_candidate_pairs(candidate_buf);
-                const std::vector<std::pair<NodeId, NodeId> > candidates = candidate_buf;
+                if (candidate_levels.size() <= core_len) {
+                    candidate_levels.resize(core_len + 1);
+                }
+
+                auto &candidates = candidate_levels[core_len];
+                generate_candidate_pairs(candidates);
 
                 for (auto [p_id, t_id]: candidates) {
                     // Check if the pair is feasible before recursing
                     if (is_feasible(p_id, t_id)) {
                         // If feasible, update the state and recurse
                         update_state(p_id, t_id);
-                        match(results, candidate_buf);
+                        match(results);
                         // Backtrack: restore the state to explore other possibilities
                         restore_state(p_id, t_id);
                     }
@@ -552,6 +551,7 @@ namespace litegraph {
             std::vector<int> depth_1;
             std::vector<int> depth_2;
             std::vector<std::optional<NodeId> > mapping;
+            std::vector<std::vector<std::pair<NodeId, NodeId> > > candidate_levels;
         };
     } // namespace detail
 
@@ -588,12 +588,7 @@ namespace litegraph {
         std::vector<std::unordered_map<std::size_t, std::size_t> > results;
         detail::VF2State<PatternGraph, TargetGraph> state(pattern, target, node_comp, edge_comp);
 
-        // Allocate one candidate-pair buffer shared across all recursive calls.
-        // Reserve a generous initial capacity to avoid reallocation during backtracking.
-        std::vector<std::pair<NodeId, NodeId> > candidate_buf;
-        candidate_buf.reserve(pattern.node_capacity() * target.node_capacity());
-
-        state.match(results, candidate_buf);
+        state.match(results);
 
         return results;
     }
@@ -1854,6 +1849,10 @@ namespace litegraph {
                 auto node_range = std::views::iota(std::size_t{0}, cap);
                 std::for_each(policy, node_range.begin(), node_range.end(),
                               [&](std::size_t i) {
+                                  if (!g.valid_node(NodeId{i})) {
+                                      return;
+                                  }
+
                                   if (!processed[i] && dist[i] < min_dist.load()) {
                                       DistT expected = min_dist.load();
                                       while (dist[i] < expected &&

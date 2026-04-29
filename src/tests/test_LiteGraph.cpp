@@ -1883,38 +1883,37 @@ TEST_CASE("[LiteGraph] parallel_dijkstra correctness with sparse node IDs", "[Li
 
     auto weight_fn = [](const double &w) { return w; };
 
-    // NOTE: parallel::parallel_dijkstra requires a std::execution policy
-    // (std::execution::seq or std::execution::par). On this platform the
-    // <execution> parallel policies are not available (no TBB / libstdc++
-    // parallel back-end linked), so we cannot call parallel_dijkstra directly
-    // here.  The array-sizing fix (node_count() -> node_capacity()) has been
-    // applied in LiteGraphAlgorithms.hpp and is verified structurally: the graph
-    // created above has sparse node IDs (node_capacity()==7, node_count()==5,
-    // and active nodes with value >= node_count()), which is exactly the scenario
-    // that triggered the out-of-bounds access.
-    //
-    // We verify the fix indirectly by confirming:
-    //   1. The graph state is correct (capacity > count, sparse IDs present).
-    //   2. Sequential dijkstra (which already uses node_capacity() correctly)
-    //      returns valid distances for all nodes including those with high IDs.
-    // When execution policies become available, replace the block below with a
-    // direct call to parallel::parallel_dijkstra.
-
     // Verify graph state embodies the sparse-ID scenario
     REQUIRE(g.node_capacity() > g.node_count());
     REQUIRE(n5.value >= g.node_count());
     REQUIRE(n6.value >= g.node_count());
 
-    // Sequential dijkstra uses node_capacity() and must handle sparse IDs correctly
-    auto [seq_dist, seq_pred] = dijkstra(g, n0, weight_fn);
+#ifdef __cpp_lib_execution
+    const auto result = parallel::parallel_dijkstra(std::execution::seq, g, n0, weight_fn);
+    REQUIRE(result.has_value());
 
-    // Spot-check known shortest distances for nodes with IDs beyond node_count()
-    // n0 -> n3 -> n4 -> n5 = 1 + 2 + 3 = 6  (cheaper than direct edge of 100)
-    REQUIRE(seq_dist[n5.value] == Catch::Approx(6.0));
-    // n0 -> n3 -> n4 -> n5 -> n6 = 6 + 4 = 10
-    REQUIRE(seq_dist[n6.value] == Catch::Approx(10.0));
-    // n3 is directly reachable with weight 1
-    REQUIRE(seq_dist[n3.value] == Catch::Approx(1.0));
+    const auto &[dist, pred] = result.value();
+    REQUIRE(dist.size() == g.node_capacity());
+    REQUIRE(pred.size() == g.node_capacity());
+
+    // n0 -> n3 -> n4 -> n5 = 1 + 2 + 3 = 6 (cheaper than direct edge of 100)
+    REQUIRE(dist[n5.value] == Catch::Approx(6.0));
+    // n0 -> n3 -> n4 -> n5 -> n6 = 10
+    REQUIRE(dist[n6.value] == Catch::Approx(10.0));
+    REQUIRE(dist[n3.value] == Catch::Approx(1.0));
+    REQUIRE(pred[n3.value].has_value());
+    REQUIRE(pred[n5.value].has_value());
+    REQUIRE(pred[n6.value].has_value());
+#else
+    // This libstdc++/libc++ build exposes <execution> but not policy objects.
+    // Keep the sparse-ID safety assertion path active via sequential dijkstra.
+    auto [dist, pred] = dijkstra(g, n0, weight_fn);
+    REQUIRE(dist.size() == g.node_capacity());
+    REQUIRE(pred.size() == g.node_capacity());
+    REQUIRE(dist[n5.value] == Catch::Approx(6.0));
+    REQUIRE(dist[n6.value] == Catch::Approx(10.0));
+    REQUIRE(dist[n3.value] == Catch::Approx(1.0));
+#endif
 }
 
 // ============================================================================
