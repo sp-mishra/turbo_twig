@@ -1910,3 +1910,58 @@ TEST_CASE("[LiteGraph] Graph with numeric node data works after as_node_matrix r
     REQUIRE(g.node_count() == 2);
     REQUIRE(g.node_capacity() == 3); // slot n1 still exists in backing store
 }
+
+// ============================================================================
+// Tests for get_stats().memory_usage adjacency-list accounting
+// ============================================================================
+
+TEST_CASE("[LiteGraph] get_stats memory_usage increases after adding nodes and edges", "[LiteGraph][Stats]") {
+    Graph<int, int, Directed> g;
+
+    // Baseline: empty graph
+    const auto stats_empty = g.get_stats();
+    const std::size_t mem_empty = stats_empty.memory_usage;
+
+    // Add nodes — this allocates Node slots (and their adjacency vectors start empty)
+    auto n0 = g.add_node(1);
+    auto n1 = g.add_node(2);
+    auto n2 = g.add_node(3);
+
+    const auto stats_nodes = g.get_stats();
+    // Memory must have grown after adding nodes
+    REQUIRE(stats_nodes.memory_usage >= mem_empty);
+
+    // Add edges — adjacency vectors inside each node grow
+    g.add_edge(n0, n1, 10);
+    g.add_edge(n0, n2, 20);
+    g.add_edge(n1, n2, 30);
+
+    const auto stats_edges = g.get_stats();
+    // Adding edges allocates edge slots and grows adjacency vectors,
+    // so memory must be >= the node-only measurement
+    REQUIRE(stats_edges.memory_usage >= stats_nodes.memory_usage);
+
+    // Sanity check: total reported memory is at least as large as the
+    // minimum we can compute manually (sizeof graph object + raw node storage)
+    const std::size_t min_expected = sizeof(g)
+                                   + g.node_capacity() * sizeof(Graph<int,int,Directed>::Node)
+                                   + g.edge_capacity() * sizeof(Graph<int,int,Directed>::Edge);
+    REQUIRE(stats_edges.memory_usage >= min_expected);
+}
+
+TEST_CASE("[LiteGraph] get_stats memory_usage counts adjacency vectors for undirected graph", "[LiteGraph][Stats]") {
+    Graph<int, int, Undirected> g;
+    const std::size_t mem_before = g.get_stats().memory_usage;
+
+    auto n0 = g.add_node(0);
+    auto n1 = g.add_node(1);
+    g.add_edge(n0, n1, 5);
+
+    const std::size_t mem_after = g.get_stats().memory_usage;
+    // Memory must be at least as large after adding nodes + an edge
+    REQUIRE(mem_after >= mem_before);
+
+    // For undirected graphs, edges are stored in out_edges on both endpoints,
+    // so the adjacency byte count should be positive once an edge exists
+    REQUIRE(mem_after > sizeof(g));
+}

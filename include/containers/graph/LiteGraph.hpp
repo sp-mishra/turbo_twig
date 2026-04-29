@@ -534,6 +534,17 @@ namespace litegraph {
         };
 
         [[nodiscard]] GraphStats get_stats() const noexcept {
+            // Accumulate heap bytes held by each node's adjacency vectors.
+            // out_edges is used by both directed and undirected graphs.
+            // in_edges is only populated for directed graphs (the vector exists
+            // in all instantiations but remains empty for undirected ones, so
+            // counting its capacity() is always safe and accurate).
+            std::size_t adj_bytes = 0;
+            for (const auto &n : nodes_) {
+                adj_bytes += n.out_edges.capacity() * sizeof(EdgeId);
+                adj_bytes += n.in_edges.capacity()  * sizeof(EdgeId);
+            }
+
             return {
                 .total_nodes = nodes_.size(),
                 .active_nodes = active_node_count_,
@@ -542,7 +553,8 @@ namespace litegraph {
                 .load_factor = nodes_.empty() ? 0.0 : static_cast<double>(active_node_count_) / nodes_.size(),
                 .memory_usage = sizeof(*this) +
                                 nodes_.capacity() * sizeof(Node) +
-                                edges_.capacity() * sizeof(Edge)
+                                edges_.capacity() * sizeof(Edge) +
+                                adj_bytes
             };
         }
 
