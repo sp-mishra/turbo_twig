@@ -95,6 +95,225 @@ TEST_CASE("[LiteGraph] Kruskal MST", "[LiteGraph]") {
     REQUIRE(mst.size() == 2);
 }
 
+// ============================================================================
+// Tests for Bug #11 Fix: has_cycle with disconnected graphs
+// ============================================================================
+
+TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with cycle in one component", "[LiteGraph][Cycle][Bug11]") {
+    // Component 1: n0 -> n1 -> n2 -> n0 (cycle)
+    // Component 2: n3 -> n4 (no cycle)
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+    const auto n4 = g.add_node(4);
+
+    // Component 1 - has cycle
+    g.add_edge(n0, n1);
+    g.add_edge(n1, n2);
+    g.add_edge(n2, n0);
+
+    // Component 2 - no cycle
+    g.add_edge(n3, n4);
+
+    REQUIRE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with no cycles", "[LiteGraph][Cycle][Bug11]") {
+    // Component 1: n0 -> n1 -> n2
+    // Component 2: n3 -> n4
+    // Component 3: n5 (isolated)
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+    const auto n4 = g.add_node(4);
+    g.add_node(5); // n5 - isolated
+
+    g.add_edge(n0, n1);
+    g.add_edge(n1, n2);
+    g.add_edge(n3, n4);
+
+    REQUIRE_FALSE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with cycle only in second component", "[LiteGraph][Cycle][Bug11]") {
+    // Component 1: n0 -> n1 (no cycle)
+    // Component 2: n2 -> n3 -> n4 -> n2 (cycle)
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+    const auto n4 = g.add_node(4);
+
+    // Component 1 - no cycle
+    g.add_edge(n0, n1);
+
+    // Component 2 - has cycle
+    g.add_edge(n2, n3);
+    g.add_edge(n3, n4);
+    g.add_edge(n4, n2);
+
+    REQUIRE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on disconnected undirected graph with cycle in one component", "[LiteGraph][Cycle][Bug11]") {
+    // Component 1: triangle n0-n1-n2 (cycle)
+    // Component 2: path n3-n4 (no cycle)
+    Graph<int, int, Undirected> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+    const auto n4 = g.add_node(4);
+
+    // Component 1 - triangle (cycle)
+    g.add_edge(n0, n1);
+    g.add_edge(n1, n2);
+    g.add_edge(n2, n0);
+
+    // Component 2 - path (no cycle)
+    g.add_edge(n3, n4);
+
+    REQUIRE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on disconnected undirected graph with no cycles", "[LiteGraph][Cycle][Bug11]") {
+    // Component 1: path n0-n1-n2
+    // Component 2: path n3-n4
+    // Component 3: isolated n5
+    Graph<int, int, Undirected> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+    const auto n4 = g.add_node(4);
+    g.add_node(5); // isolated
+
+    g.add_edge(n0, n1);
+    g.add_edge(n1, n2);
+    g.add_edge(n3, n4);
+
+    REQUIRE_FALSE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on multiple disconnected components all with cycles", "[LiteGraph][Cycle][Bug11]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    // Component 1: n0 -> n1 -> n0 (cycle)
+    g.add_edge(n0, n1);
+    g.add_edge(n1, n0);
+
+    // Component 2: n2 -> n3 -> n2 (cycle)
+    g.add_edge(n2, n3);
+    g.add_edge(n3, n2);
+
+    REQUIRE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on single isolated node", "[LiteGraph][Cycle][Bug11]") {
+    Graph<int, int, Directed> g;
+    g.add_node(0);
+
+    REQUIRE_FALSE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on many isolated nodes", "[LiteGraph][Cycle][Bug11]") {
+    Graph<int, int, Directed> g;
+    for (int i = 0; i < 100; ++i) {
+        g.add_node(i);
+    }
+
+    REQUIRE_FALSE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on large disconnected DAG", "[LiteGraph][Cycle][Bug11]") {
+    // Create 10 disconnected chains of length 10 each (no cycles)
+    Graph<int, int, Directed> g;
+    for (int chain = 0; chain < 10; ++chain) {
+        std::vector<NodeId> chain_nodes;
+        for (int i = 0; i < 10; ++i) {
+            chain_nodes.push_back(g.add_node(chain * 10 + i));
+        }
+        for (int i = 0; i < 9; ++i) {
+            g.add_edge(chain_nodes[i], chain_nodes[i + 1]);
+        }
+    }
+
+    REQUIRE_FALSE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle on large disconnected graph with one cycle", "[LiteGraph][Cycle][Bug11]") {
+    // Create 9 disconnected chains (no cycles) + 1 cycle component
+    Graph<int, int, Directed> g;
+
+    // 9 chains without cycles
+    for (int chain = 0; chain < 9; ++chain) {
+        std::vector<NodeId> chain_nodes;
+        for (int i = 0; i < 10; ++i) {
+            chain_nodes.push_back(g.add_node(chain * 10 + i));
+        }
+        for (int i = 0; i < 9; ++i) {
+            g.add_edge(chain_nodes[i], chain_nodes[i + 1]);
+        }
+    }
+
+    // 1 cycle component (last)
+    std::vector<NodeId> cycle_nodes;
+    for (int i = 0; i < 5; ++i) {
+        cycle_nodes.push_back(g.add_node(900 + i));
+    }
+    for (int i = 0; i < 4; ++i) {
+        g.add_edge(cycle_nodes[i], cycle_nodes[i + 1]);
+    }
+    g.add_edge(cycle_nodes[4], cycle_nodes[0]); // close the cycle
+
+    REQUIRE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle correctness: undirected tree should have no cycle", "[LiteGraph][Cycle][Bug11]") {
+    // A tree is a connected acyclic graph
+    Graph<int, int, Undirected> g;
+    const auto root = g.add_node(0);
+    const auto c1 = g.add_node(1);
+    const auto c2 = g.add_node(2);
+    const auto c3 = g.add_node(3);
+    const auto c4 = g.add_node(4);
+
+    g.add_edge(root, c1);
+    g.add_edge(root, c2);
+    g.add_edge(c1, c3);
+    g.add_edge(c1, c4);
+
+    REQUIRE_FALSE(has_cycle(g));
+}
+
+TEST_CASE("[LiteGraph] has_cycle correctness: undirected tree plus one edge creates cycle", "[LiteGraph][Cycle][Bug11]") {
+    Graph<int, int, Undirected> g;
+    const auto root = g.add_node(0);
+    const auto c1 = g.add_node(1);
+    const auto c2 = g.add_node(2);
+    const auto c3 = g.add_node(3);
+    const auto c4 = g.add_node(4);
+
+    g.add_edge(root, c1);
+    g.add_edge(root, c2);
+    g.add_edge(c1, c3);
+    g.add_edge(c1, c4);
+
+    // Adding this edge creates a cycle: root - c1 - c3 ... but let's connect c3 to c2
+    g.add_edge(c3, c2);
+
+    REQUIRE(has_cycle(g));
+}
+
 TEST_CASE("[LiteGraph] Prim MST", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     const auto n0 = g.add_node();

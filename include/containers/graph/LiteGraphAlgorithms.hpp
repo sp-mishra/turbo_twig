@@ -13,7 +13,6 @@
 #include <set>
 #include <ranges>
 #include <execution>
-#include <concepts>
 #include <expected>
 #include <coroutine>
 #include <barrier>
@@ -784,8 +783,8 @@ namespace litegraph {
      */
     template<LiteGraphModel GraphT>
     bool has_cycle(const GraphT &g) {
+        std::unordered_set<std::size_t> visited;
         for (const auto &[nid_val, node]: g.nodes()) {
-            std::unordered_set<std::size_t> visited;
             if (NodeId u{nid_val}; !visited.contains(u.value)) {
                 if constexpr (std::is_same_v<typename GraphT::directed_tag, Directed>) {
                     if (std::unordered_set<std::size_t> recursion_stack; detail::has_cycle_directed_util(
