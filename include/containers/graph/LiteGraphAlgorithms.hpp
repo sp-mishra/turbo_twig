@@ -70,7 +70,7 @@ namespace litegraph {
 
     // ----------- Dijkstra's Shortest Path (numeric edge weight) -----------
     // Returns distance map and predecessor map
-    template<typename GraphT>
+    template<LiteGraphModel GraphT>
     auto dijkstra(
         const GraphT &g, NodeId source,
         std::function<double(const typename GraphT::edge_type &)> weight_fn = [](const auto &e) {
@@ -123,7 +123,7 @@ namespace litegraph {
      * @param heuristic_fn A function `double(NodeId)` that estimates the cost from a given node to the target.
      * @return A pair containing a vector of distances (g-costs) from the source and a vector of predecessors to reconstruct the path.
      */
-    template<typename GraphT>
+    template<LiteGraphModel GraphT>
     auto a_star_search(
         const GraphT &g,
         NodeId source,
@@ -616,7 +616,7 @@ namespace litegraph {
      * 2. `std::vector<std::optional<NodeId>>`: A vector of predecessors to reconstruct paths.
      * 3. `bool`: A flag that is `true` if a negative-weight cycle is detected, `false` otherwise.
      */
-    template<typename GraphT>
+    template<LiteGraphModel GraphT>
     auto bellman_ford(
         const GraphT &g,
         const NodeId source,
@@ -673,7 +673,7 @@ namespace litegraph {
      * 1. `std::vector<std::vector<double>>`: A 2D matrix where dist[i][j] is the shortest distance from node i to j.
      * 2. `std::vector<std::vector<std::optional<NodeId>>>`: A 2D matrix where next[i][j] is the next node on the path from i to j.
      */
-    template<typename GraphT>
+    template<LiteGraphModel GraphT>
     auto floyd_warshall(
         const GraphT &g,
         std::function<double(const typename GraphT::edge_type &)> weight_fn
@@ -1545,6 +1545,7 @@ namespace litegraph {
     } // namespace detail
 
 
+    // Both graph parameters are already constrained with LiteGraphModel.
     template<LiteGraphModel Graph1, LiteGraphModel Graph2>
     double graph_edit_distance(
         const Graph1 &g1,
