@@ -14,8 +14,6 @@
 #include <ranges>
 #include <execution>
 #include <expected>
-#include <coroutine>
-#include <barrier>
 #include <atomic>
 #include <thread>
 #include <span>
@@ -1248,9 +1246,6 @@ namespace litegraph {
 
             // Run BFS from source to find all-pairs shortest paths in unweighted graph
             std::vector dist(node_cap, -1);
-            std::queue<NodeId> q;
-
-            q.push(source);
             dist[source.value] = 0;
 
             double sum_of_distances = 0;

@@ -16,7 +16,6 @@
 #include <format>
 #include <expected>
 #include <mdspan>
-#include <flat_map>
 #include <limits>
 
 namespace litegraph {
