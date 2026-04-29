@@ -1775,10 +1775,15 @@ namespace litegraph {
         // Parallel BFS with execution policy
         template<LiteGraphModel GraphT, typename ExecPolicy, typename Fn>
         void parallel_bfs(ExecPolicy &&policy, const GraphT &g, NodeId start, Fn &&visit) {
-            std::unordered_set<std::size_t> visited;
+            const size_t node_cap = g.node_capacity();
+            std::vector<std::atomic<bool>> visited(node_cap);
+            for (size_t i = 0; i < node_cap; ++i) {
+                visited[i].store(false, std::memory_order_relaxed);
+            }
+
             std::queue<NodeId> current_level, next_level;
             current_level.push(start);
-            visited.insert(start.value);
+            visited[start.value].store(true, std::memory_order_relaxed);
 
             while (!current_level.empty()) {
                 // Process current level in parallel
@@ -1792,22 +1797,20 @@ namespace litegraph {
                 std::for_each(policy, level_nodes.begin(), level_nodes.end(),
                               [&](NodeId u) { visit(u, g.node_data(u)); });
 
-                // Collect next level neighbors
-                std::vector<std::vector<NodeId> > neighbor_lists(level_nodes.size());
-                std::for_each(policy, level_nodes.begin(), level_nodes.end(),
-                              [&](NodeId u) {
-                                  auto idx = &u - &level_nodes[0];
-                                  for (auto v: g.neighbors(u)) {
-                                      neighbor_lists[idx].push_back(v);
-                                  }
-                              });
+                // Collect next level neighbors sequentially to avoid data races
+                // on the neighbor_lists structure (pointer arithmetic was fragile)
+                std::vector<NodeId> all_neighbors;
+                for (const auto &u : level_nodes) {
+                    for (auto v: g.neighbors(u)) {
+                        all_neighbors.push_back(v);
+                    }
+                }
 
-                // Add unvisited neighbors to next level
-                for (const auto &neighbors: neighbor_lists) {
-                    for (NodeId v: neighbors) {
-                        if (visited.insert(v.value).second) {
-                            next_level.push(v);
-                        }
+                // Add unvisited neighbors to next level (sequential, using atomic visited)
+                for (NodeId v: all_neighbors) {
+                    bool expected = false;
+                    if (visited[v.value].compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                        next_level.push(v);
                     }
                 }
 
