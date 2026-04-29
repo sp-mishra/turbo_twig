@@ -279,3 +279,184 @@ TEST_CASE("[NArayTree] Subtree constructor clones subtree correctly", "[NAryTree
     for (auto &n: subtree) data_order.push_back(n.data);
     REQUIRE(data_order == std::vector<int>{20, 30});
 }
+
+// --- New tests added: breadth-first iterator, views, levels, analyze, graft/split/merge, try_* and versioned serialization ---
+
+TEST_CASE("[NArayTree] Breadth-first iterator and range") {
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    auto *c1 = tree.insert(root, 2);
+    auto *c2 = tree.insert(root, 3);
+    tree.insert(c1, 4);
+
+    std::vector<int> bfs;
+    for (auto &n: tree.breadth_first()) bfs.push_back(n.data);
+    REQUIRE(bfs == std::vector<int>{1, 2, 3, 4});
+}
+
+TEST_CASE("[NArayTree] nodes() and leaves() views") {
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    auto *c1 = tree.insert(root, 2);
+    auto *c2 = tree.insert(root, 3);
+    tree.insert(c1, 4);
+
+    std::vector<int> nodes;
+    for (const auto &n: tree.nodes()) nodes.push_back(n.data);
+    REQUIRE(nodes == std::vector<int>{1, 2, 4, 3});
+
+    std::vector<int> leaf_vals;
+    for (const auto &n: tree.leaves()) leaf_vals.push_back(n.data);
+    REQUIRE(leaf_vals == std::vector<int>{4, 3});
+}
+
+TEST_CASE("[NArayTree] level() returns correct nodes at depth") {
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    auto *c1 = tree.insert(root, 2);
+    auto *c2 = tree.insert(root, 3);
+    tree.insert(c1, 4);
+
+    auto lvl0 = tree.level(0);
+    REQUIRE(lvl0.size() == 1);
+    REQUIRE(lvl0[0]->data == 1);
+
+    auto lvl1 = tree.level(1);
+    REQUIRE(lvl1.size() == 2);
+
+    auto lvl2 = tree.level(2);
+    REQUIRE(lvl2.size() == 1);
+    REQUIRE(lvl2[0]->data == 4);
+}
+
+TEST_CASE("[NArayTree] analyze, to_string and to_dot produce expected results") {
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    auto *c1 = tree.insert(root, 2);
+    auto *c2 = tree.insert(root, 3);
+    tree.insert(c1, 4);
+
+    auto stats = tree.analyze();
+    REQUIRE(stats.node_count == 4);
+    REQUIRE(stats.leaf_count == 2);
+    REQUIRE(stats.max_children >= 1);
+
+    auto s = tree.to_string();
+    REQUIRE(!s.empty());
+
+    auto dot = tree.to_dot();
+    REQUIRE(dot.find("digraph") != std::string::npos);
+}
+
+TEST_CASE("[NArayTree] graft, split and merge behave correctly") {
+    // Build base tree
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    auto *a = tree.insert(root, 2);
+    auto *b = tree.insert(root, 3);
+
+    // Split out node 'a' into its own tree
+    auto sub = tree.split(a);
+    REQUIRE(sub.get_root() != nullptr);
+    REQUIRE(sub.get_root()->data == 2);
+    REQUIRE(tree.find(2) == nullptr);
+
+    // Graft it back under root
+    tree.graft(root, std::move(sub));
+    REQUIRE(tree.find(2) != nullptr);
+
+    // Merge another tree
+    NAryTree<int> other;
+    auto *oroot = other.insert(nullptr, 99);
+    tree.merge(std::move(other));
+    REQUIRE(tree.find(99) != nullptr);
+}
+
+TEST_CASE("[NArayTree] try_insert, try_remove and versioned serialization") {
+    IntTree tree;
+    auto res = tree.try_insert(nullptr, 10);
+    REQUIRE(res.has_value());
+    auto *n = res.value();
+    REQUIRE(n != nullptr);
+
+    auto rem = tree.try_remove(n);
+    REQUIRE(rem.has_value());
+
+    // versioned serialization roundtrip
+    tree.clear();
+    auto *r = tree.insert(nullptr, 7);
+    tree.insert(r, 8);
+    std::ostringstream oss;
+    tree.serialize_versioned(oss);
+
+    IntTree tree2;
+    std::istringstream iss(oss.str());
+    REQUIRE(tree2.deserialize_versioned(iss));
+    REQUIRE(tree2.size() == tree.size());
+}
+
+TEST_CASE("[NArayTree] Breadth-first iterator (explicit iterator loop)") {
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    auto *c1 = tree.insert(root, 2);
+    auto *c2 = tree.insert(root, 3);
+    tree.insert(c1, 4);
+
+    std::vector<int> bfs;
+    for (auto it = tree.breadth_begin(); it != tree.breadth_end(); ++it) {
+        bfs.push_back(it->data);
+    }
+    REQUIRE(bfs == std::vector<int>{1, 2, 3, 4});
+}
+
+TEST_CASE("[NArayTree] Breadth-first iterator independent begins") {
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    auto *c1 = tree.insert(root, 2);
+    auto *c2 = tree.insert(root, 3);
+    tree.insert(c1, 4);
+
+    auto it1 = tree.breadth_begin();
+    auto it2 = tree.breadth_begin();
+    REQUIRE(it1->data == it2->data);
+    ++it1;
+    // it2 should still point to root because it2 was constructed independently
+    REQUIRE(it1->data != it2->data);
+    REQUIRE(it2->data == 1);
+}
+
+TEST_CASE("[NArayTree] const breadth-first iterator works on const tree") {
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    tree.insert(root, 2);
+
+    const IntTree &ct = tree;
+    std::vector<int> vals;
+    for (auto it = ct.breadth_begin(); it != ct.breadth_end(); ++it) vals.push_back(it->data);
+    REQUIRE(vals == std::vector<int>{1, 2});
+}
+
+TEST_CASE("[NArayTree] breadth-first iterator copy semantics (shared queue observation)") {
+    // Demonstrate the current copy semantics: copying an iterator clones the current_node pointer
+    // but shares the underlying queue. Advancing the original affects the queue used by the copy.
+    IntTree tree;
+    auto *root = tree.insert(nullptr, 1);
+    auto *c1 = tree.insert(root, 2);
+    auto *c2 = tree.insert(root, 3);
+    tree.insert(c1, 4);
+
+    auto it = tree.breadth_begin();
+    auto it_copy = it; // copy shares internal queue pointer
+
+    // Advance the original once
+    ++it;
+    REQUIRE(it->data == 2);
+    // copy still holds previous current_node value until incremented
+    REQUIRE(it_copy->data == 1);
+
+    // Now advancing the copy will operate on the (already advanced) shared queue
+    ++it_copy;
+    // because the queue was popped by ++it, the next value seen by the copy is not 2 but 3
+    REQUIRE(it_copy->data == 3);
+}
+

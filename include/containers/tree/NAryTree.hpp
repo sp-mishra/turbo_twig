@@ -482,12 +482,156 @@ public:
         pointer current_node;
     };
 
+    // Breadth-first (level-order) iterator
+    class breadth_first_iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = TreeNode;
+        using difference_type = std::ptrdiff_t;
+        using pointer = TreeNode *;
+        using reference = TreeNode &;
+
+        explicit breadth_first_iterator(pointer root_ptr = nullptr) : current_node(nullptr) {
+            if (root_ptr) {
+                q = std::make_shared<std::queue<TreeNode*>>();
+                q->push(root_ptr);
+                current_node = q->front();
+            }
+        }
+
+        reference operator*() const { return *current_node; }
+        pointer operator->() const { return current_node; }
+
+        breadth_first_iterator &operator++() {
+            if (!q || q->empty()) {
+                current_node = nullptr;
+                q.reset();
+                return *this;
+            }
+
+            TreeNode *node = q->front();
+            q->pop();
+            for (const auto &child: node->children) {
+                q->push(child.get());
+            }
+
+            if (!q->empty()) current_node = q->front();
+            else {
+                current_node = nullptr;
+                q.reset();
+            }
+            return *this;
+        }
+
+        breadth_first_iterator operator++(int) {
+            breadth_first_iterator tmp = *this;
+            ++*this;
+            return tmp;
+        }
+
+        friend bool operator==(const breadth_first_iterator &a, const breadth_first_iterator &b) {
+            return a.current_node == b.current_node;
+        }
+
+        friend bool operator!=(const breadth_first_iterator &a, const breadth_first_iterator &b) {
+            return a.current_node != b.current_node;
+        }
+
+    private:
+        pointer current_node = nullptr;
+        std::shared_ptr<std::queue<TreeNode*>> q;
+    };
+
+    class const_breadth_first_iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = const TreeNode;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const TreeNode *;
+        using reference = const TreeNode &;
+
+        explicit const_breadth_first_iterator(pointer root_ptr = nullptr) : current_node(nullptr) {
+            if (root_ptr) {
+                q = std::make_shared<std::queue<const TreeNode*>>();
+                q->push(root_ptr);
+                current_node = q->front();
+            }
+        }
+
+        reference operator*() const { return *current_node; }
+        pointer operator->() const { return current_node; }
+
+        const_breadth_first_iterator &operator++() {
+            if (!q || q->empty()) {
+                current_node = nullptr;
+                q.reset();
+                return *this;
+            }
+
+            const TreeNode *node = q->front();
+            q->pop();
+            for (const auto &child: node->children) {
+                q->push(child.get());
+            }
+
+            if (!q->empty()) current_node = q->front();
+            else {
+                current_node = nullptr;
+                q.reset();
+            }
+            return *this;
+        }
+
+        const_breadth_first_iterator operator++(int) {
+            const_breadth_first_iterator tmp = *this;
+            ++*this;
+            return tmp;
+        }
+
+        friend bool operator==(const const_breadth_first_iterator &a, const const_breadth_first_iterator &b) {
+            return a.current_node == b.current_node;
+        }
+
+        friend bool operator!=(const const_breadth_first_iterator &a, const const_breadth_first_iterator &b) {
+            return a.current_node != b.current_node;
+        }
+
+    private:
+        pointer current_node = nullptr;
+        std::shared_ptr<std::queue<const TreeNode*>> q;
+    };
+
+    // Standard begin/end iterate over pre-order by default
     auto begin() { return pre_order_iterator(root.get()); }
     auto end() { return pre_order_iterator(nullptr); }
     auto begin() const { return const_pre_order_iterator(root.get()); }
     auto end() const { return const_pre_order_iterator(nullptr); }
     auto cbegin() const { return const_pre_order_iterator(root.get()); }
     auto cend() const { return const_pre_order_iterator(nullptr); }
+
+    // Breadth-first begin/end and range
+    auto breadth_begin() { return breadth_first_iterator(root.get()); }
+    auto breadth_end() { return breadth_first_iterator(nullptr); }
+    auto breadth_begin() const { return const_breadth_first_iterator(root.get()); }
+    auto breadth_end() const { return const_breadth_first_iterator(nullptr); }
+
+    auto breadth_first() {
+        struct range {
+            NAryTree &t;
+            auto begin() { return breadth_first_iterator(t.root.get()); }
+            auto end() const { return breadth_first_iterator(nullptr); }
+        };
+        return range{*this};
+    }
+
+    auto breadth_first() const {
+        struct range {
+            const NAryTree &t;
+            auto begin() const { return const_breadth_first_iterator(t.root.get()); }
+            auto end() const { return const_breadth_first_iterator(nullptr); }
+        };
+        return range{*this};
+    }
 
     auto post_order() {
         struct range {
