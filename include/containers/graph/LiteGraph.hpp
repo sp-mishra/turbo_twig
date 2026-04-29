@@ -558,15 +558,15 @@ namespace litegraph {
     using UndirectedGraph = Graph<std::monostate, std::monostate, Undirected>;
     using WeightedUndirectedGraph = Graph<std::monostate, double, Undirected>;
 
-    // Graph factory functions with perfect forwarding
-    template<typename... Args>
-    auto make_directed_graph(Args &&... args) {
-        return Graph<Args..., Directed>{std::forward<Args>(args)...};
+    // Graph factory functions
+    template<typename NodeT = std::monostate, typename EdgeT = std::monostate>
+    auto make_directed_graph() {
+        return Graph<NodeT, EdgeT, Directed>{};
     }
 
-    template<typename... Args>
-    auto make_undirected_graph(Args &&... args) {
-        return Graph<Args..., Undirected>{std::forward<Args>(args)...};
+    template<typename NodeT = std::monostate, typename EdgeT = std::monostate>
+    auto make_undirected_graph() {
+        return Graph<NodeT, EdgeT, Undirected>{};
     }
 
 } // namespace litegraph
