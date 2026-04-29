@@ -1832,19 +1832,24 @@ namespace litegraph {
             using DistT = double;
             constexpr DistT INF = std::numeric_limits<DistT>::infinity();
 
-            std::vector<DistT> dist(g.node_count(), INF);
-            std::vector<std::optional<NodeId> > pred(g.node_count());
-            std::vector<bool> processed(g.node_count(), false);
+            // Arrays are indexed by NodeId::value, so they must be sized by node_capacity()
+            // (not node_count()) to correctly handle sparse / lazily-deleted node IDs.
+            const std::size_t cap = g.node_capacity();
+
+            std::vector<DistT> dist(cap, INF);
+            std::vector<std::optional<NodeId> > pred(cap);
+            std::vector<bool> processed(cap, false);
 
             dist[source.value] = 0;
 
-            // Parallel relaxation phases
+            // Parallel relaxation phases — iterate over the full ID space [0, cap) so that
+            // nodes whose IDs are >= node_count() (sparse IDs) are not missed.
             for (std::size_t phase = 0; phase < g.node_count(); ++phase) {
                 // Find minimum distance unprocessed node
                 std::atomic min_dist{INF};
-                std::atomic<std::size_t> min_node{g.node_count()};
+                std::atomic<std::size_t> min_node{cap}; // cap is the "not found" sentinel
 
-                auto node_range = std::views::iota(std::size_t{0}, g.node_count());
+                auto node_range = std::views::iota(std::size_t{0}, cap);
                 std::for_each(policy, node_range.begin(), node_range.end(),
                               [&](std::size_t i) {
                                   if (!processed[i] && dist[i] < min_dist.load()) {
@@ -1858,7 +1863,7 @@ namespace litegraph {
                                   }
                               });
 
-                if (min_node.load() == g.node_count()) break;
+                if (min_node.load() == cap) break; // no reachable unprocessed node remains
 
                 NodeId u{min_node.load()};
                 processed[u.value] = true;
