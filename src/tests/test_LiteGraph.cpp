@@ -1334,6 +1334,56 @@ TEST_CASE("[LiteGraph] Bipartite matching on non-bipartite graph", "[LiteGraph][
     REQUIRE(matching.empty());
 }
 
+TEST_CASE("[LiteGraph] Greedy coloring on undirected triangle requires 3 colors", "[LiteGraph][Coloring]") {
+    // A triangle (3-clique) needs exactly 3 colors
+    Graph<int, int, Undirected> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n0, 1);
+
+    const auto colors = greedy_graph_coloring(g);
+
+    REQUIRE(colors[n0.value].has_value());
+    REQUIRE(colors[n1.value].has_value());
+    REQUIRE(colors[n2.value].has_value());
+    // All three must be different
+    REQUIRE(colors[n0.value].value() != colors[n1.value].value());
+    REQUIRE(colors[n1.value].value() != colors[n2.value].value());
+    REQUIRE(colors[n0.value].value() != colors[n2.value].value());
+    // Exactly 3 distinct colors used
+    std::set<int> used{*colors[n0.value], *colors[n1.value], *colors[n2.value]};
+    REQUIRE(used.size() == 3);
+}
+
+TEST_CASE("[LiteGraph] Greedy coloring on undirected path requires at most 2 colors", "[LiteGraph][Coloring]") {
+    // A path graph is bipartite; greedy should use at most 2 colors
+    Graph<int, int, Undirected> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n3, 1);
+
+    const auto colors = greedy_graph_coloring(g);
+
+    REQUIRE(colors[n0.value].has_value());
+    REQUIRE(colors[n1.value].has_value());
+    REQUIRE(colors[n2.value].has_value());
+    REQUIRE(colors[n3.value].has_value());
+    // Adjacent nodes must differ
+    REQUIRE(colors[n0.value].value() != colors[n1.value].value());
+    REQUIRE(colors[n1.value].value() != colors[n2.value].value());
+    REQUIRE(colors[n2.value].value() != colors[n3.value].value());
+    // At most 2 distinct colors
+    std::set<int> used{*colors[n0.value], *colors[n1.value], *colors[n2.value], *colors[n3.value]};
+    REQUIRE(used.size() <= 2);
+}
+
 TEST_CASE("[LiteGraph] Graph coloring on bipartite graph", "[LiteGraph][Coloring]") {
     Graph<int, int, Undirected> g;
     const auto n0 = g.add_node(0);

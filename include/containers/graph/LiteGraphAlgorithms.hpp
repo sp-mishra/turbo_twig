@@ -1039,25 +1039,16 @@ namespace litegraph {
             NodeId u{nid_val};
             std::unordered_set<int> neighbor_colors;
 
-            // For undirected graphs, check both directions for neighbors
+            // For undirected graphs, neighbors() already returns all adjacent nodes
+            // (the graph stores each edge in out_edges on both endpoints), so a single
+            // pass over neighbors() is sufficient and correct.
+            // For directed graphs, neighbors() only returns successors, so we also
+            // inspect in_edges to treat the graph as undirected for coloring purposes.
             for (auto v: g.neighbors(u)) {
                 if (colors[v.value]) {
                     neighbor_colors.insert(*colors[v.value]);
                 }
             }
-            if constexpr (std::is_same_v<typename GraphT::directed_tag, Undirected>) {
-                // Also check for neighbors where u is the target (reverse direction)
-                for (const auto &[other_nid_val, node_obj]: g.nodes()) {
-                    if (NodeId other{other_nid_val}; other.value != u.value) {
-                        for (auto v: g.neighbors(other)) {
-                            if (v.value == u.value && colors[other.value]) {
-                                neighbor_colors.insert(*colors[other.value]);
-                            }
-                        }
-                    }
-                }
-            }
-            // For directed graphs, also check incoming neighbors to treat graph as undirected for coloring
             if constexpr (std::is_same_v<typename GraphT::directed_tag, Directed>) {
                 for (auto eid: g.in_edges(u)) {
                     if (const auto &edge = g.get_edge(eid); colors[edge.from.value]) {
