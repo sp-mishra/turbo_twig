@@ -459,4 +459,3 @@ TEST_CASE("[NArayTree] breadth-first iterator copy semantics (shared queue obser
     // because the queue was popped by ++it, the next value seen by the copy is not 2 but 3
     REQUIRE(it_copy->data == 3);
 }
-

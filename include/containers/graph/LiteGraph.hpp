@@ -152,11 +152,16 @@ namespace litegraph {
         // Explicitly defaulted special member functions.
         // All six are defaulted so the compiler generates correct
         // copy/move semantics for the vector members.
-        Graph()                            = default;
-        ~Graph()                           = default;
-        Graph(const Graph &)               = default;
-        Graph(Graph &&) noexcept           = default;
-        Graph &operator=(const Graph &)    = default;
+        Graph() = default;
+
+        ~Graph() = default;
+
+        Graph(const Graph &) = default;
+
+        Graph(Graph &&) noexcept = default;
+
+        Graph &operator=(const Graph &) = default;
+
         Graph &operator=(Graph &&) noexcept = default;
 
         // C++23 deducing this for CRTP-like behavior without inheritance
@@ -367,7 +372,7 @@ namespace litegraph {
         template<typename Fn>
         void for_each_out_edge(NodeId nid, Fn &&fn) {
             if (!valid_node(nid)) return;
-            for (EdgeId eid : nodes_[nid.value].out_edges) {
+            for (EdgeId eid: nodes_[nid.value].out_edges) {
                 if (!valid_edge(eid)) continue;
                 auto &edge = edges_[eid.value];
                 const NodeId target = edge.from.value == nid.value ? edge.to : edge.from;
@@ -379,7 +384,7 @@ namespace litegraph {
         template<typename Fn>
         void for_each_out_edge(NodeId nid, Fn &&fn) const {
             if (!valid_node(nid)) return;
-            for (EdgeId eid : nodes_[nid.value].out_edges) {
+            for (EdgeId eid: nodes_[nid.value].out_edges) {
                 if (!valid_edge(eid)) continue;
                 const auto &edge = edges_[eid.value];
                 const NodeId target = edge.from.value == nid.value ? edge.to : edge.from;
@@ -406,7 +411,7 @@ namespace litegraph {
         void for_each_in_edge(NodeId nid, Fn &&fn) {
             static_assert(std::is_same_v<Directedness, Directed>, "for_each_in_edge() only for directed graphs");
             if (!valid_node(nid)) return;
-            for (EdgeId eid : nodes_[nid.value].in_edges) {
+            for (EdgeId eid: nodes_[nid.value].in_edges) {
                 if (!valid_edge(eid)) continue;
                 auto &edge = edges_[eid.value];
                 if (!valid_node(edge.from)) continue;
@@ -418,7 +423,7 @@ namespace litegraph {
         void for_each_in_edge(NodeId nid, Fn &&fn) const {
             static_assert(std::is_same_v<Directedness, Directed>, "for_each_in_edge() only for directed graphs");
             if (!valid_node(nid)) return;
-            for (EdgeId eid : nodes_[nid.value].in_edges) {
+            for (EdgeId eid: nodes_[nid.value].in_edges) {
                 if (!valid_edge(eid)) continue;
                 const auto &edge = edges_[eid.value];
                 if (!valid_node(edge.from)) continue;
@@ -462,7 +467,7 @@ namespace litegraph {
         // graph storage.
         [[nodiscard]] std::vector<EdgeId> out_edge_ids(NodeId nid) const {
             std::vector<EdgeId> result;
-            for (EdgeId eid : nodes_[nid.value].out_edges) {
+            for (EdgeId eid: nodes_[nid.value].out_edges) {
                 if (edges_[eid.value].active) result.push_back(eid);
             }
             return result;
@@ -472,10 +477,10 @@ namespace litegraph {
         // Safe to use across graph mutations; the returned vector is independent of
         // graph storage.
         template<typename D = Directedness>
-        [[nodiscard]] std::enable_if_t<std::is_same_v<D, Directed>, std::vector<EdgeId>>
+        [[nodiscard]] std::enable_if_t<std::is_same_v<D, Directed>, std::vector<EdgeId> >
         in_edge_ids(NodeId nid) const {
             std::vector<EdgeId> result;
-            for (EdgeId eid : nodes_[nid.value].in_edges) {
+            for (EdgeId eid: nodes_[nid.value].in_edges) {
                 if (edges_[eid.value].active) result.push_back(eid);
             }
             return result;
@@ -491,11 +496,11 @@ namespace litegraph {
         }
 
         // Size / capacity
-        [[nodiscard]] std::size_t node_count()    const noexcept { return active_node_count_; }
-        [[nodiscard]] std::size_t edge_count()    const noexcept { return active_edge_count_; }
+        [[nodiscard]] std::size_t node_count() const noexcept { return active_node_count_; }
+        [[nodiscard]] std::size_t edge_count() const noexcept { return active_edge_count_; }
         [[nodiscard]] std::size_t node_capacity() const noexcept { return nodes_.size(); }
         [[nodiscard]] std::size_t edge_capacity() const noexcept { return edges_.size(); }
-        [[nodiscard]] bool        empty()         const noexcept { return active_node_count_ == 0; }
+        [[nodiscard]] bool empty() const noexcept { return active_node_count_ == 0; }
 
         // Access edge object by EdgeId (const and non-const)
         Edge &get_edge(EdgeId eid) {
@@ -568,7 +573,8 @@ namespace litegraph {
             return std::ref(nodes_[nid.value].data);
         }
 
-        [[nodiscard]] std::expected<std::reference_wrapper<const NodeT>, GraphError> try_node_data(NodeId nid) const noexcept {
+        [[nodiscard]] std::expected<std::reference_wrapper<const NodeT>, GraphError> try_node_data(
+            NodeId nid) const noexcept {
             if (!valid_node(nid)) {
                 return std::unexpected(GraphError::InvalidNode);
             }
@@ -633,9 +639,9 @@ namespace litegraph {
             // in all instantiations but remains empty for undirected ones, so
             // counting its capacity() is always safe and accurate).
             std::size_t adj_bytes = 0;
-            for (const auto &n : nodes_) {
+            for (const auto &n: nodes_) {
                 adj_bytes += n.out_edges.capacity() * sizeof(EdgeId);
-                adj_bytes += n.in_edges.capacity()  * sizeof(EdgeId);
+                adj_bytes += n.in_edges.capacity() * sizeof(EdgeId);
             }
 
             return {
@@ -737,7 +743,6 @@ namespace litegraph {
     auto make_undirected_graph() -> Graph<NodeT, EdgeT, Undirected> {
         return Graph<NodeT, EdgeT, Undirected>{};
     }
-
 } // namespace litegraph
 
 namespace std {

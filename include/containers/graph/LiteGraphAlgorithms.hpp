@@ -52,7 +52,7 @@ namespace litegraph {
             return compact_to_original_[compact_node_index];
         }
 
-        [[nodiscard]] const std::vector<std::optional<std::size_t>> &original_to_compact() const noexcept {
+        [[nodiscard]] const std::vector<std::optional<std::size_t> > &original_to_compact() const noexcept {
             return original_to_compact_;
         }
 
@@ -104,7 +104,7 @@ namespace litegraph {
         std::vector<EdgeT> edge_data_;
         std::vector<double> edge_weights_;
         bool edge_weights_enabled_ = false;
-        std::vector<std::optional<std::size_t>> original_to_compact_;
+        std::vector<std::optional<std::size_t> > original_to_compact_;
         std::vector<NodeId> compact_to_original_;
 
         template<Hashable NodeT, Hashable E, DirectednessTag D>
@@ -116,7 +116,7 @@ namespace litegraph {
         CsrGraph<EdgeT, Directedness> csr;
 
         csr.original_to_compact_.assign(g.node_capacity(), std::nullopt);
-        for (NodeId nid : g.active_node_ids()) {
+        for (NodeId nid: g.active_node_ids()) {
             csr.original_to_compact_[nid.value] = csr.compact_to_original_.size();
             csr.compact_to_original_.push_back(nid);
         }
@@ -128,7 +128,7 @@ namespace litegraph {
         for (std::size_t c = 0; c < compact_nodes; ++c) {
             const NodeId original = csr.compact_to_original_[c];
             std::size_t count = 0;
-            for (EdgeId eid : g.out_edge_ids(original)) {
+            for (EdgeId eid: g.out_edge_ids(original)) {
                 const auto &edge = g.get_edge(eid);
                 const NodeId target = edge.from.value == original.value ? edge.to : edge.from;
                 if (g.valid_node(target) && csr.original_to_compact_[target.value].has_value()) {
@@ -152,7 +152,7 @@ namespace litegraph {
         // Second pass: fill compact adjacency arrays.
         for (std::size_t c = 0; c < compact_nodes; ++c) {
             const NodeId original = csr.compact_to_original_[c];
-            for (EdgeId eid : g.out_edge_ids(original)) {
+            for (EdgeId eid: g.out_edge_ids(original)) {
                 const auto &edge = g.get_edge(eid);
                 const NodeId target = edge.from.value == original.value ? edge.to : edge.from;
                 if (!g.valid_node(target)) continue;
@@ -269,7 +269,7 @@ namespace litegraph {
             }
 
             const double base = (1.0 - d) / static_cast<double>(n)
-                              + d * dangling_mass / static_cast<double>(n);
+                                + d * dangling_mass / static_cast<double>(n);
             std::fill(next_rank.begin(), next_rank.end(), base);
 
             for (std::size_t u = 0; u < n; ++u) {
@@ -1603,7 +1603,7 @@ namespace litegraph {
             while (!S.empty()) {
                 NodeId w = S.top();
                 S.pop();
-                for (NodeId v : P[w.value]) {
+                for (NodeId v: P[w.value]) {
                     if (sigma[w.value] != 0) {
                         delta[v.value] += (sigma[v.value] / sigma[w.value]) * (1.0 + delta[w.value]);
                     }
@@ -2046,7 +2046,7 @@ namespace litegraph {
         template<LiteGraphModel GraphT, typename ExecPolicy, typename Fn>
         void parallel_bfs(ExecPolicy &&policy, const GraphT &g, NodeId start, Fn &&visit) {
             const size_t node_cap = g.node_capacity();
-            std::vector<std::atomic<bool>> visited(node_cap);
+            std::vector<std::atomic<bool> > visited(node_cap);
             for (size_t i = 0; i < node_cap; ++i) {
                 visited[i].store(false, std::memory_order_relaxed);
             }
@@ -2070,7 +2070,7 @@ namespace litegraph {
                 // Collect next level neighbors sequentially to avoid data races
                 // on the neighbor_lists structure (pointer arithmetic was fragile)
                 std::vector<NodeId> all_neighbors;
-                for (const auto &u : level_nodes) {
+                for (const auto &u: level_nodes) {
                     for (auto v: g.neighbors(u)) {
                         all_neighbors.push_back(v);
                     }

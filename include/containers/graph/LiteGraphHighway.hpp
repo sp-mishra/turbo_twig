@@ -4,7 +4,6 @@
 #include "LiteGraphAlgorithms.hpp"
 #include <algorithm>
 #include <cstdint>
-#include <cmath>
 #include <stdexcept>
 #include <vector>
 

@@ -44,13 +44,13 @@ TEST_CASE("[LiteGraph] active_node_ids and active_edge_ids exclude removed eleme
     g.remove_node(n2); // also deactivates e2
 
     std::vector<std::size_t> active_nodes;
-    for (const auto nid : g.active_node_ids()) {
+    for (const auto nid: g.active_node_ids()) {
         REQUIRE(g.valid_node(nid));
         active_nodes.push_back(nid.value);
     }
 
     std::vector<std::size_t> active_edges;
-    for (const auto eid : g.active_edge_ids()) {
+    for (const auto eid: g.active_edge_ids()) {
         REQUIRE(g.valid_edge(eid));
         active_edges.push_back(eid.value);
     }
@@ -72,12 +72,12 @@ TEST_CASE("[LiteGraph] active ID helpers include all IDs before removals", "[Lit
     const auto e1 = g.add_edge(n1, n2, 22);
 
     std::vector<std::size_t> active_nodes;
-    for (const auto nid : g.active_node_ids()) {
+    for (const auto nid: g.active_node_ids()) {
         active_nodes.push_back(nid.value);
     }
 
     std::vector<std::size_t> active_edges;
-    for (const auto eid : g.active_edge_ids()) {
+    for (const auto eid: g.active_edge_ids()) {
         active_edges.push_back(eid.value);
     }
 
@@ -140,7 +140,8 @@ TEST_CASE("[LiteGraph] for_each_in_edge traverses directed incoming edges", "[Li
     REQUIRE(weight_sum == 12);
 }
 
-TEST_CASE("[LiteGraph] for_each_neighbor traverses undirected neighbors and skips inactive edges", "[LiteGraph][HotPathTraversal]") {
+TEST_CASE("[LiteGraph] for_each_neighbor traverses undirected neighbors and skips inactive edges",
+          "[LiteGraph][HotPathTraversal]") {
     Graph<int, int, Undirected> g;
     const auto n0 = g.add_node(0);
     const auto n1 = g.add_node(1);
@@ -232,7 +233,7 @@ TEST_CASE("[LiteGraph] freeze_to_csr undirected traversal", "[LiteGraph][CSR]") 
     REQUIRE(n0_neighbors[0].value == c1);
     REQUIRE(n1_neighbors.size() == 2);
     REQUIRE(((n1_neighbors[0].value == c0 && n1_neighbors[1].value == c2) ||
-             (n1_neighbors[0].value == c2 && n1_neighbors[1].value == c0)));
+        (n1_neighbors[0].value == c2 && n1_neighbors[1].value == c0)));
     REQUIRE(n2_neighbors.size() == 1);
     REQUIRE(n2_neighbors[0].value == c1);
 }
@@ -432,7 +433,7 @@ TEST_CASE("[LiteGraph] CSR PageRank ranks sum to one", "[LiteGraph][CSR][PageRan
     const auto pr = pagerank(csr);
 
     double sum = 0.0;
-    for (const double r : pr.ranks) sum += r;
+    for (const double r: pr.ranks) sum += r;
     REQUIRE(sum == Catch::Approx(1.0).margin(1e-9));
 }
 
@@ -452,12 +453,12 @@ TEST_CASE("[LiteGraph] CSR PageRank handles dangling and isolated nodes", "[Lite
 
     REQUIRE(pr.converged);
     REQUIRE(pr.ranks.size() == csr.node_count());
-    for (const double r : pr.ranks) {
+    for (const double r: pr.ranks) {
         REQUIRE(r > 0.0);
     }
 
     double sum = 0.0;
-    for (const double r : pr.ranks) sum += r;
+    for (const double r: pr.ranks) sum += r;
     REQUIRE(sum == Catch::Approx(1.0).margin(1e-9));
 }
 
@@ -540,7 +541,7 @@ TEST_CASE("[LiteGraph] Highway PageRank handles dangling nodes", "[LiteGraph][Hi
 
     REQUIRE(simd_boundary.ranks.size() == csr.node_count());
     double sum = 0.0;
-    for (const double r : simd_boundary.ranks) {
+    for (const double r: simd_boundary.ranks) {
         REQUIRE(r > 0.0);
         sum += r;
     }
@@ -574,7 +575,8 @@ TEST_CASE("[LiteGraph] Highway PageRank supports SIMD tail handling", "[LiteGrap
     }
 }
 
-TEST_CASE("[LiteGraph] Experimental Highway weighted CSR relaxation updates min distances", "[LiteGraph][Highway][Experimental]") {
+TEST_CASE("[LiteGraph] Experimental Highway weighted CSR relaxation updates min distances",
+          "[LiteGraph][Highway][Experimental]") {
     Graph<int, double, Directed> g;
     const auto n0 = g.add_node(0);
     const auto n1 = g.add_node(1);
@@ -606,7 +608,8 @@ TEST_CASE("[LiteGraph] Experimental Highway weighted CSR relaxation updates min 
     REQUIRE(pred[csr.compact_index(n3).value()].value() == c0);
 }
 
-TEST_CASE("[LiteGraph] Experimental Highway weighted CSR relaxation handles tail-sized blocks", "[LiteGraph][Highway][Experimental]") {
+TEST_CASE("[LiteGraph] Experimental Highway weighted CSR relaxation handles tail-sized blocks",
+          "[LiteGraph][Highway][Experimental]") {
     Graph<int, double, Directed> g;
     std::vector<NodeId> n;
     for (int i = 0; i < 6; ++i) n.push_back(g.add_node(i));
@@ -707,7 +710,8 @@ TEST_CASE("[LiteGraph] Kruskal MST", "[LiteGraph]") {
 // Tests for Bug #11 Fix: has_cycle with disconnected graphs
 // ============================================================================
 
-TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with cycle in one component", "[LiteGraph][Cycle][Bug11]") {
+TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with cycle in one component",
+          "[LiteGraph][Cycle][Bug11]") {
     // Component 1: n0 -> n1 -> n2 -> n0 (cycle)
     // Component 2: n3 -> n4 (no cycle)
     Graph<int, int, Directed> g;
@@ -747,7 +751,8 @@ TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with no cycles",
     REQUIRE_FALSE(has_cycle(g));
 }
 
-TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with cycle only in second component", "[LiteGraph][Cycle][Bug11]") {
+TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with cycle only in second component",
+          "[LiteGraph][Cycle][Bug11]") {
     // Component 1: n0 -> n1 (no cycle)
     // Component 2: n2 -> n3 -> n4 -> n2 (cycle)
     Graph<int, int, Directed> g;
@@ -768,7 +773,8 @@ TEST_CASE("[LiteGraph] has_cycle on disconnected directed graph with cycle only 
     REQUIRE(has_cycle(g));
 }
 
-TEST_CASE("[LiteGraph] has_cycle on disconnected undirected graph with cycle in one component", "[LiteGraph][Cycle][Bug11]") {
+TEST_CASE("[LiteGraph] has_cycle on disconnected undirected graph with cycle in one component",
+          "[LiteGraph][Cycle][Bug11]") {
     // Component 1: triangle n0-n1-n2 (cycle)
     // Component 2: path n3-n4 (no cycle)
     Graph<int, int, Undirected> g;
@@ -903,7 +909,8 @@ TEST_CASE("[LiteGraph] has_cycle correctness: undirected tree should have no cyc
     REQUIRE_FALSE(has_cycle(g));
 }
 
-TEST_CASE("[LiteGraph] has_cycle correctness: undirected tree plus one edge creates cycle", "[LiteGraph][Cycle][Bug11]") {
+TEST_CASE("[LiteGraph] has_cycle correctness: undirected tree plus one edge creates cycle",
+          "[LiteGraph][Cycle][Bug11]") {
     Graph<int, int, Undirected> g;
     const auto root = g.add_node(0);
     const auto c1 = g.add_node(1);
@@ -1231,7 +1238,7 @@ TEST_CASE("[LiteGraph] Complete graph properties", "[LiteGraph]") {
     const int N = 5;
     std::vector<NodeId> nodes;
     nodes.reserve(N);
-for (int i = 0; i < N; ++i) nodes.push_back(g.add_node(i));
+    for (int i = 0; i < N; ++i) nodes.push_back(g.add_node(i));
     for (int i = 0; i < N; ++i)
         for (int j = i + 1; j < N; ++j)
             g.add_edge(nodes[i], nodes[j], 1);
@@ -2199,7 +2206,7 @@ TEST_CASE("[LiteGraph] Betweenness centrality on star graph (center is bridge)",
     for (int i = 1; i <= 5; ++i) {
         leaves.push_back(g.add_node(i));
     }
-    for (const auto leaf : leaves) {
+    for (const auto leaf: leaves) {
         g.add_edge(center, leaf, 1);
     }
 
@@ -2209,7 +2216,7 @@ TEST_CASE("[LiteGraph] Betweenness centrality on star graph (center is bridge)",
     REQUIRE(centrality[center.value] > 0.0);
 
     // All leaves should have zero centrality
-    for (const auto leaf : leaves) {
+    for (const auto leaf: leaves) {
         REQUIRE(centrality[leaf.value] == Catch::Approx(0.0));
     }
 }
@@ -2362,7 +2369,8 @@ TEST_CASE("[LiteGraph] Betweenness centrality on bridge graph", "[LiteGraph][Cen
     REQUIRE(centrality[n2.value] == Catch::Approx(centrality[n3.value]));
 }
 
-TEST_CASE("[LiteGraph] Betweenness centrality: values sum correctly for undirected graph", "[LiteGraph][Centrality][Bug12]") {
+TEST_CASE("[LiteGraph] Betweenness centrality: values sum correctly for undirected graph",
+          "[LiteGraph][Centrality][Bug12]") {
     // For an undirected path of 3 nodes: n0-n1-n2
     // Only one pair (n0,n2) has shortest path through n1
     // Normalized: n1's centrality = 1 / ((3-1)*(3-2)/2) = 1/1 = 1.0
@@ -2664,8 +2672,8 @@ TEST_CASE("[LiteGraph] get_stats memory_usage increases after adding nodes and e
     // Sanity check: total reported memory is at least as large as the
     // minimum we can compute manually (sizeof graph object + raw node storage)
     const std::size_t min_expected = sizeof(g)
-                                   + g.node_capacity() * sizeof(Graph<int,int,Directed>::Node)
-                                   + g.edge_capacity() * sizeof(Graph<int,int,Directed>::Edge);
+                                     + g.node_capacity() * sizeof(Graph<int, int, Directed>::Node)
+                                     + g.edge_capacity() * sizeof(Graph<int, int, Directed>::Edge);
     REQUIRE(stats_edges.memory_usage >= min_expected);
 }
 
