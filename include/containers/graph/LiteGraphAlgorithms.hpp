@@ -1330,17 +1330,17 @@ namespace litegraph {
 
             std::vector delta(node_cap, 0.0);
 
-            // Accumulation phase
+            // Accumulation phase (Brandes' algorithm)
             while (!S.empty()) {
-                auto [value] = S.top();
+                NodeId w = S.top();
                 S.pop();
-                for (auto [value]: P[value]) {
-                    if (sigma[value] != 0) {
-                        delta[value] += sigma[value] / sigma[value] * (1.0 + delta[value]);
+                for (NodeId v : P[w.value]) {
+                    if (sigma[w.value] != 0) {
+                        delta[v.value] += (sigma[v.value] / sigma[w.value]) * (1.0 + delta[w.value]);
                     }
                 }
-                if (value != s.value) {
-                    centrality[value] += delta[value];
+                if (w.value != s.value) {
+                    centrality[w.value] += delta[w.value];
                 }
             }
         }
