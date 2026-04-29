@@ -35,6 +35,7 @@ include_directories(${CMAKE_SOURCE_DIR}/dependencies)
 include_directories(${CMAKE_SOURCE_DIR}/dependencies/Catch2-3.9.0/extras)
 include_directories(include)
 include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/dependencies/highway)
 
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -42,6 +43,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(BUILD_EXAMPLES OFF)
 set(BUILD_SHARED_LIBS OFF)
 
+# highway
+set(HWY_TEST_STANDALONE OFF)
+set(HWY_ENABLE_EXAMPLES OFF)
+set(HWY_ENABLE_INSTALL OFF)
+set(HWY_ENABLE_TESTS OFF)
+set(HWY_BUILD_TESTS OFF)
+
+add_subdirectory(${CMAKE_SOURCE_DIR}/dependencies/highway)
 
 link_directories(/usr/local/lib)
 link_directories(${HOME_LIB_DIR})
@@ -94,5 +103,7 @@ if (BUILD_TESTS)
     )
     add_executable(turbo_twig_tests ${TEST_SOURCE})
     target_link_libraries(turbo_twig_tests PRIVATE
-            Catch2)
+            Catch2
+            hwy
+    )
 endif ()

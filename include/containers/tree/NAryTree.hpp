@@ -18,11 +18,8 @@
 #include <shared_mutex>
 #include <iostream>
 
-#ifdef __x86_64__
-#include <immintrin.h>
-#elif defined(__aarch64__) || defined(__arm64__)
-#include <arm_neon.h>
-#endif
+// Google Highway for portable SIMD operations
+#include <hwy/highway.h>
 
 // Memory pool for optimized node allocation
 template<typename T>
