@@ -341,8 +341,11 @@ namespace litegraph {
                 }
             }
 
-            // The main recursive matching function
-            void match(std::vector<std::unordered_map<std::size_t, std::size_t> > &results) {
+            // The main recursive matching function.
+            // candidate_buf is a reusable scratch buffer passed through all recursive
+            // calls to avoid repeated heap allocation in generate_candidate_pairs.
+            void match(std::vector<std::unordered_map<std::size_t, std::size_t> > &results,
+                       std::vector<std::pair<NodeId, NodeId> > &candidate_buf) {
                 // If the mapping is complete, we found a solution
                 if (core_len == g1.node_count()) {
                     // Store the current mapping as a result
@@ -356,13 +359,18 @@ namespace litegraph {
                     return;
                 }
 
-                // Generate the next candidate pair (p_id, t_id)
-                for (auto [p_id, t_id]: generate_candidate_pairs()) {
+                // Fill the reusable buffer with candidate pairs for this recursion level.
+                // We copy the buffer into a local snapshot so that nested recursive calls
+                // can safely reuse candidate_buf without corrupting the current loop.
+                generate_candidate_pairs(candidate_buf);
+                const std::vector<std::pair<NodeId, NodeId> > candidates = candidate_buf;
+
+                for (auto [p_id, t_id]: candidates) {
                     // Check if the pair is feasible before recursing
                     if (is_feasible(p_id, t_id)) {
                         // If feasible, update the state and recurse
                         update_state(p_id, t_id);
-                        match(results);
+                        match(results, candidate_buf);
                         // Backtrack: restore the state to explore other possibilities
                         restore_state(p_id, t_id);
                     }
@@ -370,9 +378,11 @@ namespace litegraph {
             }
 
         private:
-            // Generates candidate pairs of nodes (one from pattern, one from target) to be matched.
-            std::vector<std::pair<NodeId, NodeId> > generate_candidate_pairs() const {
-                std::vector<std::pair<NodeId, NodeId> > pairs;
+            // Fills `pairs` (clearing it first) with candidate (pattern, target) node pairs.
+            // The caller owns the buffer and may reuse it across recursive calls to avoid
+            // repeated heap allocation.
+            void generate_candidate_pairs(std::vector<std::pair<NodeId, NodeId> > &pairs) const {
+                pairs.clear();
 
                 // Prioritize nodes in the frontier (terminal set) for efficiency
                 for (size_t p_idx = 0; p_idx < g1.node_capacity(); ++p_idx) {
@@ -384,7 +394,7 @@ namespace litegraph {
                                 pairs.push_back({p_id, NodeId{t_idx}});
                             }
                         }
-                        return pairs; // Return immediately with frontier pairs
+                        return; // Return immediately with frontier pairs
                     }
                 }
 
@@ -397,10 +407,10 @@ namespace litegraph {
                                 pairs.push_back({p_id, NodeId{t_idx}});
                             }
                         }
-                        return pairs; // Return with first available unmapped node
+                        return; // Return with first available unmapped node
                     }
                 }
-                return pairs;
+                // pairs remains empty if no candidates found
             }
 
             bool is_feasible(NodeId p_id, NodeId t_id) {
@@ -580,7 +590,12 @@ namespace litegraph {
         std::vector<std::unordered_map<std::size_t, std::size_t> > results;
         detail::VF2State<PatternGraph, TargetGraph> state(pattern, target, node_comp, edge_comp);
 
-        state.match(results);
+        // Allocate one candidate-pair buffer shared across all recursive calls.
+        // Reserve a generous initial capacity to avoid reallocation during backtracking.
+        std::vector<std::pair<NodeId, NodeId> > candidate_buf;
+        candidate_buf.reserve(pattern.node_capacity() * target.node_capacity());
+
+        state.match(results, candidate_buf);
 
         return results;
     }
