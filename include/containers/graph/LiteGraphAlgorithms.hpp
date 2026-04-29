@@ -28,6 +28,129 @@ namespace litegraph {
         NoPath
     };
 
+    // ----------- Frozen CSR Graph -----------
+    template<typename EdgeT, DirectednessTag Directedness = Directed>
+    class CsrGraph {
+    public:
+        using edge_type = EdgeT;
+        using directed_tag = Directedness;
+
+        [[nodiscard]] std::size_t node_count() const noexcept { return compact_to_original_.size(); }
+        [[nodiscard]] std::size_t edge_count() const noexcept { return targets_.size(); }
+
+        [[nodiscard]] std::optional<std::size_t> compact_index(NodeId original) const noexcept {
+            if (original.value >= original_to_compact_.size()) return std::nullopt;
+            return original_to_compact_[original.value];
+        }
+
+        [[nodiscard]] NodeId original_node_id(std::size_t compact_node_index) const {
+            if (compact_node_index >= compact_to_original_.size()) {
+                throw std::out_of_range("CSR compact node index out of range.");
+            }
+            return compact_to_original_[compact_node_index];
+        }
+
+        [[nodiscard]] const std::vector<std::optional<std::size_t>> &original_to_compact() const noexcept {
+            return original_to_compact_;
+        }
+
+        [[nodiscard]] const std::vector<NodeId> &compact_to_original() const noexcept {
+            return compact_to_original_;
+        }
+
+        [[nodiscard]] std::span<const NodeId> out_neighbors(std::size_t compact_node_index) const {
+            if (compact_node_index >= node_count()) {
+                throw std::out_of_range("CSR compact node index out of range.");
+            }
+            const std::size_t begin = offsets_[compact_node_index];
+            const std::size_t end = offsets_[compact_node_index + 1];
+            return std::span<const NodeId>(targets_).subspan(begin, end - begin);
+        }
+
+        [[nodiscard]] std::span<const EdgeId> out_edges(std::size_t compact_node_index) const {
+            if (compact_node_index >= node_count()) {
+                throw std::out_of_range("CSR compact node index out of range.");
+            }
+            const std::size_t begin = offsets_[compact_node_index];
+            const std::size_t end = offsets_[compact_node_index + 1];
+            return std::span<const EdgeId>(edge_ids_).subspan(begin, end - begin);
+        }
+
+        [[nodiscard]] std::span<const EdgeT> out_edge_data(std::size_t compact_node_index) const {
+            if (compact_node_index >= node_count()) {
+                throw std::out_of_range("CSR compact node index out of range.");
+            }
+            const std::size_t begin = offsets_[compact_node_index];
+            const std::size_t end = offsets_[compact_node_index + 1];
+            return std::span<const EdgeT>(edge_data_).subspan(begin, end - begin);
+        }
+
+    private:
+        std::vector<std::size_t> offsets_;
+        std::vector<NodeId> targets_; // compact target node indices encoded as NodeId{compact_index}
+        std::vector<EdgeId> edge_ids_;
+        std::vector<EdgeT> edge_data_;
+        std::vector<std::optional<std::size_t>> original_to_compact_;
+        std::vector<NodeId> compact_to_original_;
+
+        template<Hashable NodeT, Hashable E, DirectednessTag D>
+        friend CsrGraph<E, D> freeze_to_csr(const Graph<NodeT, E, D> &g);
+    };
+
+    template<Hashable NodeT, Hashable EdgeT, DirectednessTag Directedness>
+    CsrGraph<EdgeT, Directedness> freeze_to_csr(const Graph<NodeT, EdgeT, Directedness> &g) {
+        CsrGraph<EdgeT, Directedness> csr;
+
+        csr.original_to_compact_.assign(g.node_capacity(), std::nullopt);
+        for (NodeId nid : g.active_node_ids()) {
+            csr.original_to_compact_[nid.value] = csr.compact_to_original_.size();
+            csr.compact_to_original_.push_back(nid);
+        }
+
+        const std::size_t compact_nodes = csr.compact_to_original_.size();
+        csr.offsets_.assign(compact_nodes + 1, 0);
+
+        // First pass: count active outgoing adjacency entries per compact node.
+        for (std::size_t c = 0; c < compact_nodes; ++c) {
+            const NodeId original = csr.compact_to_original_[c];
+            std::size_t count = 0;
+            for (EdgeId eid : g.out_edge_ids(original)) {
+                const auto &edge = g.get_edge(eid);
+                const NodeId target = edge.from.value == original.value ? edge.to : edge.from;
+                if (g.valid_node(target) && csr.original_to_compact_[target.value].has_value()) {
+                    ++count;
+                }
+            }
+            csr.offsets_[c + 1] = csr.offsets_[c] + count;
+        }
+
+        const std::size_t arc_count = csr.offsets_.back();
+        csr.targets_.resize(arc_count);
+        csr.edge_ids_.resize(arc_count);
+        csr.edge_data_.resize(arc_count);
+
+        std::vector<std::size_t> cursor = csr.offsets_;
+
+        // Second pass: fill compact adjacency arrays.
+        for (std::size_t c = 0; c < compact_nodes; ++c) {
+            const NodeId original = csr.compact_to_original_[c];
+            for (EdgeId eid : g.out_edge_ids(original)) {
+                const auto &edge = g.get_edge(eid);
+                const NodeId target = edge.from.value == original.value ? edge.to : edge.from;
+                if (!g.valid_node(target)) continue;
+                const auto compact_target = csr.original_to_compact_[target.value];
+                if (!compact_target.has_value()) continue;
+
+                const std::size_t pos = cursor[c]++;
+                csr.targets_[pos] = NodeId{*compact_target};
+                csr.edge_ids_[pos] = eid;
+                csr.edge_data_[pos] = edge.data;
+            }
+        }
+
+        return csr;
+    }
+
     // ----------- Breadth-First Search (BFS) -----------
     template<LiteGraphModel GraphT, typename Fn>
     void bfs(const GraphT &g, NodeId start, Fn &&visit) {

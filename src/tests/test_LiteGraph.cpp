@@ -167,6 +167,107 @@ TEST_CASE("[LiteGraph] for_each_neighbor traverses undirected neighbors and skip
     REQUIRE(weight_sum == 3);
 }
 
+TEST_CASE("[LiteGraph] freeze_to_csr directed offsets and targets", "[LiteGraph][CSR]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+
+    const auto e0 = g.add_edge(n0, n1, 10);
+    const auto e1 = g.add_edge(n0, n2, 20);
+    const auto e2 = g.add_edge(n2, n1, 30);
+
+    const auto csr = freeze_to_csr(g);
+
+    REQUIRE(csr.node_count() == 3);
+    REQUIRE(csr.edge_count() == 3);
+    REQUIRE(csr.compact_index(n0).value() == 0);
+    REQUIRE(csr.compact_index(n1).value() == 1);
+    REQUIRE(csr.compact_index(n2).value() == 2);
+    REQUIRE(csr.original_node_id(0).value == n0.value);
+    REQUIRE(csr.original_node_id(1).value == n1.value);
+    REQUIRE(csr.original_node_id(2).value == n2.value);
+
+    const auto n0_neighbors = csr.out_neighbors(0);
+    const auto n0_edges = csr.out_edges(0);
+    REQUIRE(n0_neighbors.size() == 2);
+    REQUIRE(n0_neighbors[0].value == 1);
+    REQUIRE(n0_neighbors[1].value == 2);
+    REQUIRE(n0_edges.size() == 2);
+    REQUIRE(n0_edges[0].value == e0.value);
+    REQUIRE(n0_edges[1].value == e1.value);
+
+    const auto n2_neighbors = csr.out_neighbors(2);
+    const auto n2_edges = csr.out_edges(2);
+    REQUIRE(n2_neighbors.size() == 1);
+    REQUIRE(n2_neighbors[0].value == 1);
+    REQUIRE(n2_edges.size() == 1);
+    REQUIRE(n2_edges[0].value == e2.value);
+}
+
+TEST_CASE("[LiteGraph] freeze_to_csr undirected traversal", "[LiteGraph][CSR]") {
+    Graph<int, int, Undirected> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+
+    g.add_edge(n0, n1, 5);
+    g.add_edge(n1, n2, 7);
+
+    const auto csr = freeze_to_csr(g);
+
+    REQUIRE(csr.node_count() == 3);
+    REQUIRE(csr.edge_count() == 4); // undirected edges appear from both endpoints
+
+    const auto c0 = csr.compact_index(n0).value();
+    const auto c1 = csr.compact_index(n1).value();
+    const auto c2 = csr.compact_index(n2).value();
+
+    const auto n0_neighbors = csr.out_neighbors(c0);
+    const auto n1_neighbors = csr.out_neighbors(c1);
+    const auto n2_neighbors = csr.out_neighbors(c2);
+
+    REQUIRE(n0_neighbors.size() == 1);
+    REQUIRE(n0_neighbors[0].value == c1);
+    REQUIRE(n1_neighbors.size() == 2);
+    REQUIRE(((n1_neighbors[0].value == c0 && n1_neighbors[1].value == c2) ||
+             (n1_neighbors[0].value == c2 && n1_neighbors[1].value == c0)));
+    REQUIRE(n2_neighbors.size() == 1);
+    REQUIRE(n2_neighbors[0].value == c1);
+}
+
+TEST_CASE("[LiteGraph] freeze_to_csr excludes inactive nodes and edges", "[LiteGraph][CSR]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    const auto e0 = g.add_edge(n0, n1, 11);
+    g.add_edge(n1, n2, 22);
+    g.add_edge(n2, n3, 33);
+    const auto e3 = g.add_edge(n0, n3, 44);
+
+    g.remove_node(n2); // deactivates incident edges
+    g.remove_edge(e3);
+
+    const auto csr = freeze_to_csr(g);
+
+    REQUIRE(g.node_count() == 3); // original graph remains mutable and unchanged by freeze
+    REQUIRE(csr.node_count() == 3); // {n0, n1, n3}
+    REQUIRE(csr.edge_count() == 1); // only e0 remains active
+
+    REQUIRE(csr.compact_index(n0).has_value());
+    REQUIRE(csr.compact_index(n1).has_value());
+    REQUIRE_FALSE(csr.compact_index(n2).has_value());
+    REQUIRE(csr.compact_index(n3).has_value());
+
+    const auto c0 = csr.compact_index(n0).value();
+    const auto out_edges_c0 = csr.out_edges(c0);
+    REQUIRE(out_edges_c0.size() == 1);
+    REQUIRE(out_edges_c0[0].value == e0.value);
+}
+
 TEST_CASE("[LiteGraph] BFS and DFS traversal", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     auto n0 = g.add_node(1);
