@@ -339,11 +339,10 @@ namespace litegraph {
         // Returns a lazy, non-owning filtered range over the active outgoing EdgeIds
         // of the given node.
         //
-        // INVALIDATION HAZARD: The returned range holds a reference into the graph's
-        // internal adjacency storage.  Any structural modification to the graph
-        // (add_node, remove_node, add_edge, remove_edge, compact, clear) while the
-        // range is in use is undefined behaviour.  If you need to mutate the graph
-        // during iteration, call out_edge_ids() instead to materialise a copy first.
+        // INVALIDATION HAZARD: The returned range does not own storage and is only
+        // valid while the graph is not structurally modified. Adding/removing nodes
+        // or edges (or compact()/clear()) can invalidate it.
+        // If you need to mutate during iteration, call out_edge_ids() to copy first.
         auto out_edges(NodeId nid) const {
             const auto &vec = nodes_[nid.value].out_edges;
             return vec | std::views::filter([this](EdgeId eid) { return edges_[eid.value].active; });
@@ -352,9 +351,9 @@ namespace litegraph {
         // Returns a lazy, non-owning filtered range over the active incoming EdgeIds
         // of the given node (directed graphs only).
         //
-        // INVALIDATION HAZARD: Same as out_edges() — any structural modification to the
-        // graph while this range is live is undefined behaviour.  Use in_edge_ids() to
-        // obtain a safe copy before mutating.
+        // INVALIDATION HAZARD: The returned range is non-owning and only valid while
+        // the graph is not structurally modified. Adding/removing nodes or edges can
+        // invalidate it. Use in_edge_ids() to obtain an owned copy before mutating.
         auto in_edges(NodeId nid) const {
             static_assert(std::is_same_v<Directedness, Directed>, "in_edges() only for directed graphs");
             const auto &vec = nodes_[nid.value].in_edges;
@@ -364,9 +363,9 @@ namespace litegraph {
         // Returns a lazy, non-owning range of NodeIds reachable from nid via active
         // outgoing edges.
         //
-        // INVALIDATION HAZARD: This range is derived from out_edges() and shares the
-        // same invalidation rules — any structural modification to the graph while this
-        // range is live is undefined behaviour.
+        // INVALIDATION HAZARD: This non-owning range is derived from out_edges() and is
+        // only valid while the graph is not structurally modified. Adding/removing
+        // nodes or edges can invalidate it.
         auto neighbors(NodeId nid) const {
             return out_edges(nid)
                    | std::views::transform([this, nid](EdgeId eid) {
@@ -535,19 +534,9 @@ namespace litegraph {
             }
         }
 
-        // as_node_matrix has been removed.
-        //
-        // The former implementation performed a reinterpret_cast from the internal
-        // Node* storage pointer (which contains adjacency vectors and metadata) to
-        // a raw T* and returned an mdspan into that memory.  This is undefined
-        // behaviour: Node is not layout-compatible with T, the cast violates strict
-        // aliasing rules, and the resulting mdspan pointed into non-contiguous,
-        // non-T memory.
-        //
-        // If a contiguous matrix view over node data is needed in the future, the
-        // correct approach is to maintain a separate SoA (Structure-of-Arrays)
-        // buffer for the node payload and expose an mdspan into that buffer.
-        // That change is outside the scope of this fix.
+        // as_node_matrix has been removed for safety.
+        // If a contiguous node-data matrix view is needed in future, provide a
+        // separate owned contiguous payload buffer and return a view into that.
 
         // Performance monitoring
         struct GraphStats {

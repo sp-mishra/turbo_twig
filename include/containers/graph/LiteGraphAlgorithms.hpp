@@ -17,6 +17,7 @@
 #include <atomic>
 #include <thread>
 #include <span>
+#include <deque>
 
 namespace litegraph {
     // Additional error types for algorithms
@@ -355,8 +356,8 @@ namespace litegraph {
                     return;
                 }
 
-                if (candidate_levels.size() <= core_len) {
-                    candidate_levels.resize(core_len + 1);
+                while (candidate_levels.size() <= core_len) {
+                    candidate_levels.emplace_back();
                 }
 
                 auto &candidates = candidate_levels[core_len];
@@ -551,7 +552,7 @@ namespace litegraph {
             std::vector<int> depth_1;
             std::vector<int> depth_2;
             std::vector<std::optional<NodeId> > mapping;
-            std::vector<std::vector<std::pair<NodeId, NodeId> > > candidate_levels;
+            std::deque<std::vector<std::pair<NodeId, NodeId> > > candidate_levels;
         };
     } // namespace detail
 
