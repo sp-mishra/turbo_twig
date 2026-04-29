@@ -18,6 +18,7 @@
 #include <thread>
 #include <span>
 #include <deque>
+#include <cstdint>
 
 namespace litegraph {
     // Additional error types for algorithms
@@ -85,6 +86,9 @@ namespace litegraph {
             return std::span<const EdgeT>(edge_data_).subspan(begin, end - begin);
         }
 
+        [[nodiscard]] const std::vector<std::size_t> &offsets() const noexcept { return offsets_; }
+        [[nodiscard]] const std::vector<NodeId> &targets() const noexcept { return targets_; }
+
     private:
         std::vector<std::size_t> offsets_;
         std::vector<NodeId> targets_; // compact target node indices encoded as NodeId{compact_index}
@@ -149,6 +153,60 @@ namespace litegraph {
         }
 
         return csr;
+    }
+
+    struct CsrBfsResult {
+        std::vector<std::size_t> distances;
+        std::vector<std::optional<std::size_t> > predecessors;
+    };
+
+    template<typename EdgeT, DirectednessTag Directedness>
+    CsrBfsResult bfs(const CsrGraph<EdgeT, Directedness> &g, const std::size_t start_compact_index) {
+        if (start_compact_index >= g.node_count()) {
+            throw std::out_of_range("CSR BFS start index out of range.");
+        }
+
+        constexpr std::size_t INF = std::numeric_limits<std::size_t>::max();
+        CsrBfsResult result{
+            .distances = std::vector<std::size_t>(g.node_count(), INF),
+            .predecessors = std::vector<std::optional<std::size_t> >(g.node_count(), std::nullopt)
+        };
+
+        std::vector<std::uint8_t> visited(g.node_count(), static_cast<std::uint8_t>(0));
+        std::queue<std::size_t> q;
+
+        visited[start_compact_index] = static_cast<std::uint8_t>(1);
+        result.distances[start_compact_index] = 0;
+        q.push(start_compact_index);
+
+        const auto &offsets = g.offsets();
+        const auto &targets = g.targets();
+
+        while (!q.empty()) {
+            const std::size_t u = q.front();
+            q.pop();
+
+            for (std::size_t i = offsets[u]; i < offsets[u + 1]; ++i) {
+                const std::size_t v = targets[i].value;
+                if (visited[v]) continue;
+
+                visited[v] = static_cast<std::uint8_t>(1);
+                result.distances[v] = result.distances[u] + 1;
+                result.predecessors[v] = u;
+                q.push(v);
+            }
+        }
+
+        return result;
+    }
+
+    template<typename EdgeT, DirectednessTag Directedness>
+    CsrBfsResult bfs(const CsrGraph<EdgeT, Directedness> &g, const NodeId start_original_node) {
+        const auto compact_index = g.compact_index(start_original_node);
+        if (!compact_index) {
+            throw std::out_of_range("CSR BFS start node is not active in the frozen graph.");
+        }
+        return bfs(g, *compact_index);
     }
 
     // ----------- Breadth-First Search (BFS) -----------

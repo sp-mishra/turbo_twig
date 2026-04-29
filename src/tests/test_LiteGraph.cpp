@@ -268,6 +268,123 @@ TEST_CASE("[LiteGraph] freeze_to_csr excludes inactive nodes and edges", "[LiteG
     REQUIRE(out_edges_c0[0].value == e0.value);
 }
 
+TEST_CASE("[LiteGraph] CSR BFS on directed path graph", "[LiteGraph][CSR][BFS]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n3, 1);
+
+    const auto csr = freeze_to_csr(g);
+    const auto result = bfs(csr, n0);
+
+    const auto c0 = csr.compact_index(n0).value();
+    const auto c1 = csr.compact_index(n1).value();
+    const auto c2 = csr.compact_index(n2).value();
+    const auto c3 = csr.compact_index(n3).value();
+
+    REQUIRE(result.distances[c0] == 0);
+    REQUIRE(result.distances[c1] == 1);
+    REQUIRE(result.distances[c2] == 2);
+    REQUIRE(result.distances[c3] == 3);
+    REQUIRE_FALSE(result.predecessors[c0].has_value());
+    REQUIRE(result.predecessors[c1].value() == c0);
+    REQUIRE(result.predecessors[c2].value() == c1);
+    REQUIRE(result.predecessors[c3].value() == c2);
+}
+
+TEST_CASE("[LiteGraph] CSR BFS on disconnected graph", "[LiteGraph][CSR][BFS]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    g.add_edge(n0, n1, 1); // component A
+    g.add_edge(n2, n3, 1); // component B
+
+    const auto csr = freeze_to_csr(g);
+    const auto result = bfs(csr, n0);
+
+    constexpr std::size_t INF = std::numeric_limits<std::size_t>::max();
+    const auto c0 = csr.compact_index(n0).value();
+    const auto c1 = csr.compact_index(n1).value();
+    const auto c2 = csr.compact_index(n2).value();
+    const auto c3 = csr.compact_index(n3).value();
+
+    REQUIRE(result.distances[c0] == 0);
+    REQUIRE(result.distances[c1] == 1);
+    REQUIRE(result.distances[c2] == INF);
+    REQUIRE(result.distances[c3] == INF);
+    REQUIRE_FALSE(result.predecessors[c2].has_value());
+    REQUIRE_FALSE(result.predecessors[c3].has_value());
+}
+
+TEST_CASE("[LiteGraph] CSR BFS excludes deleted nodes after freeze", "[LiteGraph][CSR][BFS]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n3, 1);
+
+    g.remove_node(n2);
+
+    const auto csr = freeze_to_csr(g);
+    const auto result = bfs(csr, n0);
+
+    REQUIRE_FALSE(csr.compact_index(n2).has_value());
+
+    constexpr std::size_t INF = std::numeric_limits<std::size_t>::max();
+    const auto c0 = csr.compact_index(n0).value();
+    const auto c1 = csr.compact_index(n1).value();
+    const auto c3 = csr.compact_index(n3).value();
+
+    REQUIRE(result.distances[c0] == 0);
+    REQUIRE(result.distances[c1] == 1);
+    REQUIRE(result.distances[c3] == INF);
+}
+
+TEST_CASE("[LiteGraph] CSR BFS results align with Graph BFS on path", "[LiteGraph][CSR][BFS]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n3, 1);
+
+    std::vector<NodeId> graph_order;
+    bfs(g, n0, [&](NodeId u, const int &) { graph_order.push_back(u); });
+
+    const auto csr = freeze_to_csr(g);
+    const auto result = bfs(csr, n0);
+
+    std::vector<NodeId> csr_order;
+    for (std::size_t d = 0; d < graph_order.size(); ++d) {
+        for (std::size_t c = 0; c < result.distances.size(); ++c) {
+            if (result.distances[c] == d) {
+                csr_order.push_back(csr.original_node_id(c));
+            }
+        }
+    }
+
+    REQUIRE(csr_order.size() == graph_order.size());
+    REQUIRE(csr_order[0].value == graph_order[0].value);
+    REQUIRE(csr_order[1].value == graph_order[1].value);
+    REQUIRE(csr_order[2].value == graph_order[2].value);
+    REQUIRE(csr_order[3].value == graph_order[3].value);
+}
+
 TEST_CASE("[LiteGraph] BFS and DFS traversal", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     auto n0 = g.add_node(1);
