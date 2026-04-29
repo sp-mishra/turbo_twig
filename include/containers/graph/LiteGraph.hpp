@@ -444,25 +444,6 @@ namespace litegraph {
             active_edge_count_ = 0;
         }
 
-        // C++23 parallel operations support
-        template<typename Exec>
-        void parallel_clear_inactive(Exec &&policy)
-            requires std::is_execution_policy_v<std::remove_cvref_t<Exec> > {
-            // Parallel removal of inactive elements
-            auto node_end = std::remove_if(policy, nodes_.begin(), nodes_.end(),
-                                           [](const auto &node) { return !node.active; });
-            nodes_.erase(node_end, nodes_.end());
-
-            auto edge_end = std::remove_if(policy, edges_.begin(), edges_.end(),
-                                           [](const auto &edge) { return !edge.active; });
-            edges_.erase(edge_end, edges_.end());
-
-            // Recalculate counts
-            active_node_count_ = std::count_if(policy, nodes_.begin(), nodes_.end(),
-                                               [](const auto &node) { return node.active; });
-            active_edge_count_ = std::count_if(policy, edges_.begin(), edges_.end(),
-                                               [](const auto &edge) { return edge.active; });
-        }
 
         // Parallel node processing
         template<typename Exec, typename UnaryPred>
