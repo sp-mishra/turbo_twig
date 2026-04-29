@@ -179,46 +179,22 @@ namespace litegraph {
 
         // Add node
         NodeId add_node(const NodeT &data = NodeT{}) {
-            nodes_.push_back({data, {}, {}, true});
-            active_node_count_++;
-            return NodeId{nodes_.size() - 1};
+            return add_node_impl(data);
         }
 
         // Add edge
         EdgeId add_edge(NodeId from, NodeId to, const EdgeT &data = EdgeT{}) {
-            if (!valid_node(from) || !valid_node(to))
-                throw std::out_of_range("Cannot add edge to invalid node.");
-            edges_.push_back({from, to, data, true});
-            auto eid = EdgeId{edges_.size() - 1};
-            nodes_[from.value].out_edges.push_back(eid);
-            if constexpr (std::is_same_v<Directedness, Directed>)
-                nodes_[to.value].in_edges.push_back(eid);
-            if constexpr (std::is_same_v<Directedness, Undirected>)
-                nodes_[to.value].out_edges.push_back(eid); // undirected: add to both
-            active_edge_count_++;
-            return eid;
+            return add_edge_impl(from, to, data);
         }
 
         // Add node (move overload)
         NodeId add_node(NodeT &&data) {
-            nodes_.push_back({std::move(data), {}, {}, true});
-            active_node_count_++;
-            return NodeId{nodes_.size() - 1};
+            return add_node_impl(std::move(data));
         }
 
         // Add edge (move overload)
         EdgeId add_edge(NodeId from, NodeId to, EdgeT &&data) {
-            if (!valid_node(from) || !valid_node(to))
-                throw std::out_of_range("Cannot add edge to invalid node.");
-            edges_.push_back({from, to, std::move(data), true});
-            auto eid = EdgeId{edges_.size() - 1};
-            nodes_[from.value].out_edges.push_back(eid);
-            if constexpr (std::is_same_v<Directedness, Directed>)
-                nodes_[to.value].in_edges.push_back(eid);
-            if constexpr (std::is_same_v<Directedness, Undirected>)
-                nodes_[to.value].out_edges.push_back(eid); // undirected: add to both
-            active_edge_count_++;
-            return eid;
+            return add_edge_impl(from, to, std::move(data));
         }
 
         // Remove node (lazy)
@@ -609,6 +585,68 @@ namespace litegraph {
         }
 
     private:
+        template<typename DataT>
+        NodeId add_node_impl(DataT &&data) {
+            Node node{std::forward<DataT>(data), {}, {}, true};
+            nodes_.push_back(std::move(node));
+
+            const NodeId nid{nodes_.size() - 1};
+            ++active_node_count_;
+            return nid;
+        }
+
+        template<typename DataT>
+        EdgeId add_edge_impl(NodeId from, NodeId to, DataT &&data) {
+            if (!valid_node(from) || !valid_node(to)) {
+                throw std::out_of_range("Cannot add edge to invalid node.");
+            }
+
+            Edge edge{from, to, std::forward<DataT>(data), true};
+            edges_.push_back(std::move(edge));
+            const EdgeId eid{edges_.size() - 1};
+
+            // Commit adjacency updates; if any push_back throws, roll back all prior pushes
+            // and remove the just-added edge so the graph remains unchanged.
+            std::size_t added_from_out = 0;
+            std::size_t added_to_adj = 0;
+
+            auto rollback_tail = [](std::vector<EdgeId> &vec, std::size_t count) {
+                while (count-- > 0) {
+                    vec.pop_back();
+                }
+            };
+
+            try {
+                nodes_[from.value].out_edges.push_back(eid);
+                added_from_out = 1;
+
+                if constexpr (std::is_same_v<Directedness, Directed>) {
+                    nodes_[to.value].in_edges.push_back(eid);
+                    added_to_adj = 1;
+                }
+
+                if constexpr (std::is_same_v<Directedness, Undirected>) {
+                    nodes_[to.value].out_edges.push_back(eid); // undirected: add to both endpoints
+                    added_to_adj = 1;
+                }
+            } catch (...) {
+                if constexpr (std::is_same_v<Directedness, Directed>) {
+                    rollback_tail(nodes_[to.value].in_edges, added_to_adj);
+                }
+
+                if constexpr (std::is_same_v<Directedness, Undirected>) {
+                    rollback_tail(nodes_[to.value].out_edges, added_to_adj);
+                }
+
+                rollback_tail(nodes_[from.value].out_edges, added_from_out);
+                edges_.pop_back();
+                throw;
+            }
+
+            ++active_edge_count_;
+            return eid;
+        }
+
         std::vector<Node> nodes_;
         std::vector<Edge> edges_;
         std::size_t active_node_count_ = 0;

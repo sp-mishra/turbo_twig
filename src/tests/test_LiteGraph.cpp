@@ -705,6 +705,69 @@ TEST_CASE("[LiteGraph] Add edge with invalid node", "[LiteGraph]") {
     REQUIRE_THROWS_AS(g.add_edge(invalid, n0, 5), std::out_of_range);
 }
 
+TEST_CASE("[LiteGraph] Mutator invariants for add_node/add_edge", "[LiteGraph][Mutators]") {
+    SECTION("Directed graph counts and adjacency are consistent") {
+        Graph<int, int, Directed> g;
+        const auto n0 = g.add_node(10);
+        const auto n1 = g.add_node(20);
+        const auto n2 = g.add_node(30);
+
+        const auto e0 = g.add_edge(n0, n1, 5);
+        const auto e1 = g.add_edge(n1, n2, 7);
+
+        REQUIRE(g.node_count() == 3);
+        REQUIRE(g.edge_count() == 2);
+        REQUIRE(g.node_capacity() >= g.node_count());
+        REQUIRE(g.edge_capacity() >= g.edge_count());
+        REQUIRE(g.out_degree(n0) == 1);
+        REQUIRE(g.out_degree(n1) == 1);
+        REQUIRE(g.in_degree(n1) == 1);
+        REQUIRE(g.in_degree(n2) == 1);
+        REQUIRE(g.valid_edge(e0));
+        REQUIRE(g.valid_edge(e1));
+    }
+
+    SECTION("Undirected graph counts and degrees are consistent") {
+        Graph<int, int, Undirected> g;
+        const auto n0 = g.add_node(1);
+        const auto n1 = g.add_node(2);
+        const auto n2 = g.add_node(3);
+
+        g.add_edge(n0, n1, 11);
+        g.add_edge(n1, n2, 22);
+
+        REQUIRE(g.node_count() == 3);
+        REQUIRE(g.edge_count() == 2);
+        REQUIRE(g.degree(n0) == 1);
+        REQUIRE(g.degree(n1) == 2);
+        REQUIRE(g.degree(n2) == 1);
+    }
+}
+
+TEST_CASE("[LiteGraph] add_edge failure leaves graph state unchanged", "[LiteGraph][Mutators]") {
+    // Throw-injection is not used here; we validate the no-mutation path for invalid endpoints.
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(1);
+    const auto n1 = g.add_node(2);
+    const auto e0 = g.add_edge(n0, n1, 10);
+
+    const auto node_count_before = g.node_count();
+    const auto edge_count_before = g.edge_count();
+    const auto edge_capacity_before = g.edge_capacity();
+    const auto out_degree_before = g.out_degree(n0);
+    const auto in_degree_before = g.in_degree(n1);
+
+    REQUIRE_THROWS_AS(g.add_edge(n0, NodeId{9999}, 77), std::out_of_range);
+
+    REQUIRE(g.node_count() == node_count_before);
+    REQUIRE(g.edge_count() == edge_count_before);
+    REQUIRE(g.edge_capacity() == edge_capacity_before);
+    REQUIRE(g.out_degree(n0) == out_degree_before);
+    REQUIRE(g.in_degree(n1) == in_degree_before);
+    REQUIRE(g.valid_edge(e0));
+    REQUIRE(g.edge_data(e0) == 10);
+}
+
 TEST_CASE("[LiteGraph] Remove node that does not exist", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     g.add_node(1);
