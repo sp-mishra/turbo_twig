@@ -361,23 +361,37 @@ namespace litegraph {
             return edges_[eid.value].data;
         }
 
-        // Get edges for a node.
-        // WARNING: The returned range captures `this` and a reference to the internal
-        // adjacency vector. Mutating the graph (adding/removing nodes or edges) while
-        // iterating the result is undefined behavior. If mutation during iteration is
-        // needed, materialize the range into a std::vector<EdgeId> first.
+        // Returns a lazy, non-owning filtered range over the active outgoing EdgeIds
+        // of the given node.
+        //
+        // INVALIDATION HAZARD: The returned range holds a reference into the graph's
+        // internal adjacency storage.  Any structural modification to the graph
+        // (add_node, remove_node, add_edge, remove_edge, compact, clear) while the
+        // range is in use is undefined behaviour.  If you need to mutate the graph
+        // during iteration, call out_edge_ids() instead to materialise a copy first.
         auto out_edges(NodeId nid) const {
             const auto &vec = nodes_[nid.value].out_edges;
             return vec | std::views::filter([this](EdgeId eid) { return edges_[eid.value].active; });
         }
 
+        // Returns a lazy, non-owning filtered range over the active incoming EdgeIds
+        // of the given node (directed graphs only).
+        //
+        // INVALIDATION HAZARD: Same as out_edges() — any structural modification to the
+        // graph while this range is live is undefined behaviour.  Use in_edge_ids() to
+        // obtain a safe copy before mutating.
         auto in_edges(NodeId nid) const {
             static_assert(std::is_same_v<Directedness, Directed>, "in_edges() only for directed graphs");
             const auto &vec = nodes_[nid.value].in_edges;
             return vec | std::views::filter([this](EdgeId eid) { return edges_[eid.value].active; });
         }
 
-        // Neighbors for a node
+        // Returns a lazy, non-owning range of NodeIds reachable from nid via active
+        // outgoing edges.
+        //
+        // INVALIDATION HAZARD: This range is derived from out_edges() and shares the
+        // same invalidation rules — any structural modification to the graph while this
+        // range is live is undefined behaviour.
         auto neighbors(NodeId nid) const {
             return out_edges(nid)
                    | std::views::transform([this, nid](EdgeId eid) {
@@ -386,6 +400,33 @@ namespace litegraph {
                        // Otherwise, the neighbor is 'from'.
                        return edge.from.value == nid.value ? edge.to : edge.from;
                    });
+        }
+
+        // Safe materialising helpers — these copy the current active edge IDs into an
+        // owned vector so the caller can freely mutate the graph afterwards.
+
+        // Returns a vector of active outgoing EdgeIds for nid.
+        // Safe to use across graph mutations; the returned vector is independent of
+        // graph storage.
+        [[nodiscard]] std::vector<EdgeId> out_edge_ids(NodeId nid) const {
+            std::vector<EdgeId> result;
+            for (EdgeId eid : nodes_[nid.value].out_edges) {
+                if (edges_[eid.value].active) result.push_back(eid);
+            }
+            return result;
+        }
+
+        // Returns a vector of active incoming EdgeIds for nid (directed graphs only).
+        // Safe to use across graph mutations; the returned vector is independent of
+        // graph storage.
+        template<typename D = Directedness>
+        [[nodiscard]] std::enable_if_t<std::is_same_v<D, Directed>, std::vector<EdgeId>>
+        in_edge_ids(NodeId nid) const {
+            std::vector<EdgeId> result;
+            for (EdgeId eid : nodes_[nid.value].in_edges) {
+                if (edges_[eid.value].active) result.push_back(eid);
+            }
+            return result;
         }
 
         // Basic validity check
