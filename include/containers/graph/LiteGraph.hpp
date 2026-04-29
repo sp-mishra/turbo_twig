@@ -454,21 +454,21 @@ namespace litegraph {
         }
 
         // Error handling with std::expected
-        [[nodiscard]] std::expected<NodeT &, GraphError> try_node_data(NodeId nid) noexcept {
+        [[nodiscard]] std::expected<std::reference_wrapper<NodeT>, GraphError> try_node_data(NodeId nid) noexcept {
             if (!valid_node(nid)) {
                 return std::unexpected(GraphError::InvalidNode);
             }
             return std::ref(nodes_[nid.value].data);
         }
 
-        [[nodiscard]] std::expected<const NodeT &, GraphError> try_node_data(NodeId nid) const noexcept {
+        [[nodiscard]] std::expected<std::reference_wrapper<const NodeT>, GraphError> try_node_data(NodeId nid) const noexcept {
             if (!valid_node(nid)) {
                 return std::unexpected(GraphError::InvalidNode);
             }
             return std::cref(nodes_[nid.value].data);
         }
 
-        [[nodiscard]] std::expected<EdgeT &, GraphError> try_edge_data(EdgeId eid) noexcept {
+        [[nodiscard]] std::expected<std::reference_wrapper<EdgeT>, GraphError> try_edge_data(EdgeId eid) noexcept {
             if (!valid_edge(eid)) {
                 return std::unexpected(GraphError::InvalidEdge);
             }
