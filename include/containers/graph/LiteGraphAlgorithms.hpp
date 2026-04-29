@@ -1139,19 +1139,19 @@ namespace litegraph {
             std::vector<int> &disc,
             std::vector<int> &low,
             std::stack<NodeId> &st,
-            std::vector<bool> &on_stack,
+            std::vector<std::uint8_t> &on_stack,
             std::vector<std::vector<NodeId> > &sccs
         ) {
             disc[u.value] = low[u.value] = ++time;
             st.push(u);
-            on_stack[u.value] = true;
+            on_stack[u.value] = static_cast<std::uint8_t>(1);
 
             for (auto v: g.neighbors(u)) {
                 if (disc[v.value] == -1) {
                     // Not visited yet
                     tarjan_scc_util(g, v, time, disc, low, st, on_stack, sccs);
                     low[u.value] = std::min(low[u.value], low[v.value]);
-                } else if (on_stack[v.value]) {
+                } else if (on_stack[v.value] != 0) {
                     // Visited and on stack (back edge)
                     low[u.value] = std::min(low[u.value], disc[v.value]);
                 }
@@ -1163,7 +1163,7 @@ namespace litegraph {
                 while (true) {
                     NodeId node_on_top = st.top();
                     st.pop();
-                    on_stack[node_on_top.value] = false;
+                    on_stack[node_on_top.value] = static_cast<std::uint8_t>(0);
                     current_scc.push_back(node_on_top);
                     if (u.value == node_on_top.value) break;
                 }
@@ -1188,7 +1188,7 @@ namespace litegraph {
         const size_t node_cap = g.node_capacity();
         std::vector disc(node_cap, -1);
         std::vector low(node_cap, -1);
-        std::vector on_stack(node_cap, false);
+        std::vector<std::uint8_t> on_stack(node_cap, static_cast<std::uint8_t>(0));
         std::vector<std::vector<NodeId> > sccs;
         std::stack<NodeId> st;
         int time = 0;
@@ -1521,8 +1521,8 @@ namespace litegraph {
 
             std::queue<NodeId> bfs_q;
             bfs_q.push(source);
-            std::vector visited(node_cap, false);
-            visited[source.value] = true;
+            std::vector<std::uint8_t> visited(node_cap, static_cast<std::uint8_t>(0));
+            visited[source.value] = static_cast<std::uint8_t>(1);
 
             while (!bfs_q.empty()) {
                 NodeId u = bfs_q.front();
@@ -1532,8 +1532,8 @@ namespace litegraph {
                 sum_of_distances += dist[u.value];
 
                 for (auto v: g.neighbors(u)) {
-                    if (!visited[v.value]) {
-                        visited[v.value] = true;
+                    if (visited[v.value] == 0) {
+                        visited[v.value] = static_cast<std::uint8_t>(1);
                         dist[v.value] = dist[u.value] + 1;
                         bfs_q.push(v);
                     }
@@ -1751,18 +1751,18 @@ namespace litegraph {
         auto cmp = [](const QEntry &a, const QEntry &b) { return a.first > b.first; };
         std::priority_queue<QEntry, std::vector<QEntry>, decltype(cmp)> pq(cmp);
 
-        std::vector<bool> in_mst(g.node_capacity(), false);
+        std::vector<std::uint8_t> in_mst(g.node_capacity(), static_cast<std::uint8_t>(0));
         size_t mst_size = 0;
 
         auto add_node_to_mst = [&](NodeId u) {
-            if (in_mst[u.value]) return;
+            if (in_mst[u.value] != 0) return;
 
-            in_mst[u.value] = true;
+            in_mst[u.value] = static_cast<std::uint8_t>(1);
             mst_size++;
             for (auto eid: g.out_edges(u)) {
                 const auto &edge = g.get_edge(eid);
                 // Add edge to PQ if it leads to a node not yet in the MST
-                if (!in_mst[edge.to.value]) {
+                if (in_mst[edge.to.value] == 0) {
                     pq.emplace(weight_fn(edge.data), eid);
                 }
             }
@@ -1777,14 +1777,14 @@ namespace litegraph {
             const auto &edge = g.get_edge(eid);
             // Both endpoints of the edge could be in the MST if we've processed a denser part of the graph.
             // We only care about edges that expand the MST.
-            if (in_mst[edge.from.value] && in_mst[edge.to.value]) {
+            if (in_mst[edge.from.value] != 0 && in_mst[edge.to.value] != 0) {
                 continue;
             }
 
             mst_edges.push_back(eid);
 
             // Find which node is new and add it to the MST
-            NodeId new_node = in_mst[edge.from.value] ? edge.to : edge.from;
+            NodeId new_node = in_mst[edge.from.value] != 0 ? edge.to : edge.from;
             add_node_to_mst(new_node);
         }
 
@@ -1797,7 +1797,7 @@ namespace litegraph {
         template<typename Graph1, typename Graph2>
         struct GEDSearchNode {
             std::vector<std::optional<NodeId> > g1_to_g2_mapping;
-            std::vector<bool> g2_is_mapped;
+            std::vector<std::uint8_t> g2_is_mapped;
             double cost_so_far = 0.0; // g_cost
             double estimated_total_cost = 0.0; // f_cost = g_cost + h_cost
 
@@ -1849,7 +1849,7 @@ namespace litegraph {
 
         SearchNode start_node;
         start_node.g1_to_g2_mapping.assign(g1.node_capacity(), std::nullopt);
-        start_node.g2_is_mapped.assign(g2.node_capacity(), false);
+        start_node.g2_is_mapped.assign(g2.node_capacity(), static_cast<std::uint8_t>(0));
         start_node.estimated_total_cost = heuristic(start_node);
         open_set.push(start_node);
 
@@ -1871,7 +1871,7 @@ namespace litegraph {
 
                 // Insert remaining unmapped g2 nodes
                 for (const auto &[nid, n_obj]: g2.nodes()) {
-                    if (!current.g2_is_mapped[nid]) {
+                    if (current.g2_is_mapped[nid] == 0) {
                         final_cost += node_ins_cost(n_obj.data);
                     }
                 }
@@ -1989,7 +1989,7 @@ namespace litegraph {
 
             // --- Successor: substitute u1 with each unmapped node u2 in g2 ---
             for (const auto &[u2_idx, u2_node]: g2.nodes()) {
-                if (!current.g2_is_mapped[u2_idx]) {
+                if (current.g2_is_mapped[u2_idx] == 0) {
                     NodeId u2{u2_idx};
                     SearchNode successor = current;
 
@@ -2030,7 +2030,7 @@ namespace litegraph {
 
                     successor.cost_so_far += step_cost;
                     successor.g1_to_g2_mapping[u1.value] = u2;
-                    successor.g2_is_mapped[u2.value] = true;
+                    successor.g2_is_mapped[u2.value] = static_cast<std::uint8_t>(1);
                     successor.estimated_total_cost = successor.cost_so_far + heuristic(successor);
                     open_set.push(successor);
                 }
@@ -2108,7 +2108,7 @@ namespace litegraph {
 
             std::vector<DistT> dist(cap, INF);
             std::vector<std::optional<NodeId> > pred(cap);
-            std::vector<bool> processed(cap, false);
+            std::vector<std::uint8_t> processed(cap, static_cast<std::uint8_t>(0));
 
             dist[source.value] = 0;
 
@@ -2126,7 +2126,7 @@ namespace litegraph {
                                       return;
                                   }
 
-                                  if (!processed[i] && dist[i] < min_dist.load()) {
+                                  if (processed[i] == 0 && dist[i] < min_dist.load()) {
                                       DistT expected = min_dist.load();
                                       while (dist[i] < expected &&
                                              !min_dist.compare_exchange_weak(expected, dist[i])) {
@@ -2140,7 +2140,7 @@ namespace litegraph {
                 if (min_node.load() == cap) break; // no reachable unprocessed node remains
 
                 NodeId u{min_node.load()};
-                processed[u.value] = true;
+                processed[u.value] = static_cast<std::uint8_t>(1);
 
                 // Parallel edge relaxation
                 auto out_edges = g.out_edges(u);
