@@ -509,17 +509,19 @@ namespace litegraph {
             }
         }
 
-        // Multidimensional view support with mdspan
-        template<typename T = NodeT>
-            requires std::same_as<T, double> || std::same_as<T, float>
-        auto as_node_matrix(std::size_t rows, std::size_t cols) const {
-            static_assert(std::is_arithmetic_v<T>, "Matrix view requires numeric node data");
-
-            // Create a view of node data as a matrix
-            auto data_ptr = reinterpret_cast<const T *>(nodes_.data());
-            return std::mdspan<const T, std::dextents<std::size_t, 2> >(
-                data_ptr, rows, cols);
-        }
+        // as_node_matrix has been removed.
+        //
+        // The former implementation performed a reinterpret_cast from the internal
+        // Node* storage pointer (which contains adjacency vectors and metadata) to
+        // a raw T* and returned an mdspan into that memory.  This is undefined
+        // behaviour: Node is not layout-compatible with T, the cast violates strict
+        // aliasing rules, and the resulting mdspan pointed into non-contiguous,
+        // non-T memory.
+        //
+        // If a contiguous matrix view over node data is needed in the future, the
+        // correct approach is to maintain a separate SoA (Structure-of-Arrays)
+        // buffer for the node payload and expose an mdspan into that buffer.
+        // That change is outside the scope of this fix.
 
         // Performance monitoring
         struct GraphStats {

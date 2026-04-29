@@ -1803,3 +1803,40 @@ TEST_CASE("[LiteGraph] parallel_dijkstra correctness with sparse node IDs", "[Li
     // n3 is directly reachable with weight 1
     REQUIRE(seq_dist[n3.value] == Catch::Approx(1.0));
 }
+
+// ============================================================================
+// Regression test: as_node_matrix has been removed (UB fix).
+//
+// The former as_node_matrix used reinterpret_cast<T*>(nodes_.data()) to return
+// an mdspan over the internal Node storage, which is undefined behaviour because
+// Node is not layout-compatible with the user-provided NodeT.
+//
+// We verify here that:
+//   1. A Graph<double, ...> can still be constructed and populated normally.
+//   2. Node data values are accessible through the safe node_data() API.
+// (There is no as_node_matrix to call -- calling it would be a compile error.)
+// ============================================================================
+TEST_CASE("[LiteGraph] Graph with numeric node data works after as_node_matrix removal", "[LiteGraph][NodeMatrix]") {
+    // Graph whose node type is double (formerly the only type accepted by as_node_matrix)
+    Graph<double, double, Directed> g;
+
+    auto n0 = g.add_node(1.0);
+    auto n1 = g.add_node(2.5);
+    auto n2 = g.add_node(3.14);
+
+    g.add_edge(n0, n1, 0.5);
+    g.add_edge(n1, n2, 1.5);
+
+    REQUIRE(g.node_count() == 3);
+    REQUIRE(g.edge_count() == 2);
+
+    // Node data is still accessible safely via node_data()
+    REQUIRE(g.node_data(n0) == Catch::Approx(1.0));
+    REQUIRE(g.node_data(n1) == Catch::Approx(2.5));
+    REQUIRE(g.node_data(n2) == Catch::Approx(3.14));
+
+    // Removing a node and checking capacity vs count
+    g.remove_node(n1);
+    REQUIRE(g.node_count() == 2);
+    REQUIRE(g.node_capacity() == 3); // slot n1 still exists in backing store
+}
