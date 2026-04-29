@@ -1,13 +1,31 @@
 # 🧩 Modern C++ Graph & Tree Libraries — Comprehensive User & Design Guide
 
+<a name="overview"></a>
 ## 🚀 Overview
 
 This suite of lightweight, header-only C++ libraries provides essential building blocks for graph, tree, and hierarchical data modeling, analysis, and algorithmics. Optimized for **C++23**, **high performance**, **zero-cost abstractions**, and **modern design patterns**, they cover:
 
-- **DominatorTree.hpp** — Ultra-fast dominator tree construction with Lengauer-Tarjan algorithm
+- **DominatorTree.hpp** — Functions to compute dominator trees (litegraph::compute_dominator_tree) and helper queries (litegraph::dominator_analysis) using a modern Lengauer–Tarjan implementation
 - **NAryTree.hpp** — Memory-safe N-ary tree with smart pointers and modern traversal patterns
 - **LiteGraph.hpp** — High-performance graph with CRTP patterns and constexpr operations
 - **LiteGraphAlgorithms.hpp** — Comprehensive algorithm suite with STL execution policies
+
+<a name="table-of-contents"></a>
+## 📑 Table of contents
+
+- [Overview](#overview)
+- [Library Summaries](#library-summaries)
+  - [DominatorTree.hpp](#dominatoretreehpp)
+  - [NAryTree.hpp](#narytreehpp)
+  - [LiteGraph.hpp](#litegraphhpp)
+  - [LiteGraphAlgorithms.hpp](#litegraphalgorithmshpp)
+- [Design Deep Dives & Modern C++ Features](#design-deep-dives)
+- [Advanced Integration Patterns](#advanced-integration-patterns)
+- [Graph Algorithms Quick Index](#graph-algorithms-quick-index)
+- [Comprehensive Algorithm Reference](#comprehensive-algorithm-reference)
+- [Best Practices & Performance Guidelines](#best-practices-performance-guidelines)
+- [Quick Reference & Examples](#quick-reference-examples)
+
 
 ### Key Design Principles
 
@@ -28,23 +46,32 @@ This suite of lightweight, header-only C++ libraries provides essential building
 
 ---
 
+<a name="library-summaries"></a>
 ## 📚 Library Summaries
 
+<a name="dominatoretreehpp"></a>
 ### DominatorTree.hpp
-**Purpose**: Compute dominators/immediate dominators for directed graphs using the optimized Lengauer-Tarjan algorithm  
-**Design**: Template-based with strong typing, constexpr operations, and O(α(n)) amortized complexity  
-**Modern Features**: CRTP pattern, concepts-based constraints, zero-cost abstractions  
+**Purpose**: Compute dominator relationships for directed graphs using a modern Lengauer–Tarjan implementation.  
 
+**Design**: Provides a free function `litegraph::compute_dominator_tree(const Graph&, NodeId)` which returns an `NAryTree<NodeId>` encoding the dominator tree, plus helpers in `litegraph::dominator_analysis` for dominance queries and lowest-common-dominator style helpers.  
+
+**Modern Features**: Concepts-constrained APIs, constexpr-friendly helpers, and an efficient DSU-backed semidominator computation.
+
+<a name="narytreehpp"></a>
 ### NAryTree.hpp  
-**Purpose**: Memory-safe N-ary tree with smart pointer management and flexible traversal strategies  
-**Design**: RAII-compliant with automatic memory management, iterator support, and serialization  
-**Modern Features**: Structured bindings support, range-based algorithms, concept-constrained templates  
+**Purpose**: Memory-safe N-ary tree with smart pointer management and flexible traversal strategies
 
+**Design**: RAII-compliant with automatic memory management, iterator support, and serialization. The `NAryTree<T>` type exposes insertion methods (`insert`, `emplace`), range-friendly iterators (pre/post order), and serialization helpers.
+
+**Modern Features**: Range-based iteration and C++23-friendly APIs. Note: the tree iterators yield `TreeNode` references (not pairs), so structured bindings like `[id, data]` are not produced by the iterator directly — access `node.data` / `node.node_id` instead.
+
+<a name="litegraphhpp"></a>
 ### LiteGraph.hpp
 **Purpose**: High-performance directed/undirected graph with adjacency list representation  
 **Design**: Cache-friendly data layout, strong ID types, constexpr graph operations  
 **Modern Features**: CRTP optimizations, concepts for type safety, parallel-ready iterators  
 
+<a name="litegraphalgorithmshpp"></a>
 ### LiteGraphAlgorithms.hpp
 **Purpose**: Comprehensive suite of graph algorithms with STL execution policy support  
 **Design**: Generic templates working with any graph representation, stateless and composable  
@@ -52,33 +79,41 @@ This suite of lightweight, header-only C++ libraries provides essential building
 
 ---
 
+<a name="design-deep-dives"></a>
 ## 🔬 Design Deep Dives & Modern C++ Features
 
 ### DominatorTree: Advanced Control Flow Analysis
 
 ```cpp
+#include "LiteGraph.hpp"
 #include "DominatorTree.hpp"
 
-// Modern usage with strong types and constexpr operations  
-constexpr auto build_dominator_analysis() {
-    DominatorTree<NodeId> dom_tree;
-    
-    // Add edges with compile-time validation
-    dom_tree.add_edge(NodeId{0}, NodeId{1});
-    dom_tree.add_edge(NodeId{1}, NodeId{2});
-    dom_tree.add_edge(NodeId{0}, NodeId{3});
-    dom_tree.add_edge(NodeId{3}, NodeId{2});
-    
-    // Build with root - uses Lengauer-Tarjan algorithm
-    dom_tree.build(NodeId{0});
-    
-    return dom_tree;
+// Build a control-flow graph using litegraph::Graph and compute the dominator tree.
+using namespace litegraph;
+
+litegraph::SimpleGraph build_cfg() {
+    litegraph::SimpleGraph cfg;
+    auto n0 = cfg.add_node();
+    auto n1 = cfg.add_node();
+    auto n2 = cfg.add_node();
+    auto n3 = cfg.add_node();
+
+    cfg.add_edge(n0, n1);
+    cfg.add_edge(n1, n2);
+    cfg.add_edge(n0, n3);
+    cfg.add_edge(n3, n2);
+
+    return cfg;
 }
 
-// Query dominance relationships
-auto dom_tree = build_dominator_analysis();
-auto idom_2 = dom_tree.immediate_dominator(NodeId{2}); // O(1) lookup
-bool dominates = dom_tree.dominates(NodeId{0}, NodeId{2}); // O(1) check
+int main() {
+    auto cfg = build_cfg();
+    // Compute dominator tree with entry node n0
+    auto dom_tree = litegraph::compute_dominator_tree(cfg, litegraph::NodeId{0});
+
+    // Query dominance using helpers
+    bool dominates = litegraph::dominator_analysis::dominates(dom_tree, litegraph::NodeId{0}, litegraph::NodeId{2});
+}
 ```
 
 **Key Improvements**:
@@ -91,22 +126,18 @@ bool dominates = dom_tree.dominates(NodeId{0}, NodeId{2}); // O(1) check
 
 ```cpp
 #include "NAryTree.hpp"
-
 // Modern tree with automatic memory management
-NAryTree<ExpressionNode> ast;
-auto root = ast.create_root(ExpressionNode{BinaryOp::Add});
+NAryTree<ExpressionNode> ast(ExpressionNode{BinaryOp::Add}); // construct with root
+auto root = ast.get_root();
 
-// Structured binding support
-for (auto [node_id, node_data] : ast.traverse_preorder()) {
-    process_node(node_data);
+// Pre-order iteration: iterator yields TreeNode references
+for (const auto &node : ast) {
+    process_node(node.data);
 }
 
-// Range-based traversal with concepts
-template<std::invocable<const ExpressionNode&> Visitor>
-void visit_leaves(const NAryTree<ExpressionNode>& tree, Visitor visitor) {
-    for (const auto& node : tree.leaf_nodes()) {
-        std::invoke(visitor, node.data);
-    }
+// Range-based traversal for leaves
+for (const auto &leaf : ast.leaves()) {
+    std::invoke([](const auto &n) { process_node(n.data); }, leaf);
 }
 
 // Serialization support
@@ -127,40 +158,21 @@ loaded_ast.deserialize(iss);
 
 ```cpp
 #include "LiteGraph.hpp"
+using namespace litegraph;
 
-// Modern graph with strong typing
-template<bool IsDirected = true>
-class Graph : public LiteGraph<NodeId, IsDirected> {
-public:
-    // CRTP pattern for zero-cost customization
-    template<typename Visitor>
-    constexpr void for_each_edge(Visitor&& visitor) const {
-        for (const auto& [from, adjacents] : this->adjacency_list()) {
-            for (const auto& to : adjacents) {
-                std::invoke(visitor, from, to);
-            }
-        }
-    }
-    
-    // Constexpr graph properties
-    constexpr size_t vertex_count() const noexcept {
-        return this->node_count();
-    }
-    
-    constexpr size_t edge_count() const noexcept {
-        size_t count = 0;
-        for_each_edge([&count](auto, auto) { ++count; });
-        return count;
-    }
-};
+// Create a simple directed graph (SimpleGraph is an alias for Graph<>)
+SimpleGraph g;
+auto n1 = g.add_node();
+auto n2 = g.add_node();
+g.add_edge(n1, n2);
 
-// Usage with modern C++ features
-Graph<true> directed_graph;
-directed_graph.add_edge(NodeId{1}, NodeId{2});
+// Query counts
+constexpr size_t vcount = g.node_count();
+size_t ecount = g.edge_count();
 
-// Concepts-based validation
-template<GraphConcept G>
-void analyze_connectivity(const G& graph) {
+// Use concepts in algorithm signatures
+template<LiteGraphModel G>
+void analyze_connectivity(const G &graph) {
     // Algorithm implementation with concept constraints
 }
 ```
@@ -178,19 +190,20 @@ void analyze_connectivity(const G& graph) {
 #include <execution>
 
 // Parallel-ready algorithms with execution policies
+// Parallel-ready algorithms with execution policies
 template<typename Graph>
-auto parallel_shortest_paths(const Graph& g, NodeId source) {
-    return dijkstra(std::execution::par_unseq, g, source);
+auto parallel_shortest_paths(const Graph &g, litegraph::NodeId source) {
+    return litegraph::parallel::parallel_dijkstra(std::execution::par_unseq, g, source);
 }
 
 // Deterministic topological sorting
-std::vector<NodeId> nodes = {NodeId{0}, NodeId{1}, NodeId{2}, NodeId{3}};
-std::vector<std::pair<NodeId, NodeId>> edges = {
-    {NodeId{0}, NodeId{2}}, {NodeId{1}, NodeId{2}}, {NodeId{2}, NodeId{3}}
+std::vector<litegraph::NodeId> nodes = {litegraph::NodeId{0}, litegraph::NodeId{1}, litegraph::NodeId{2}, litegraph::NodeId{3}};
+std::vector<std::pair<litegraph::NodeId, litegraph::NodeId>> edges = {
+    {litegraph::NodeId{0}, litegraph::NodeId{2}}, {litegraph::NodeId{1}, litegraph::NodeId{2}}, {litegraph::NodeId{2}, litegraph::NodeId{3}}
 };
 
-std::vector<NodeId> topo_order;
-std::vector<NodeId> cycle_nodes;
+std::vector<litegraph::NodeId> topo_order;
+std::vector<litegraph::NodeId> cycle_nodes;
 
 bool is_acyclic = akriti::graph::layout_extras::stable_toposort_kahn_by_index(
     nodes, edges, topo_order, &cycle_nodes
@@ -210,6 +223,7 @@ bool is_acyclic = akriti::graph::layout_extras::stable_toposort_kahn_by_index(
 
 ---
 
+<a name="advanced-integration-patterns"></a>
 ## 🍳 Advanced Integration Patterns
 
 ### 1. Complete Control Flow Analysis Pipeline
@@ -221,47 +235,40 @@ bool is_acyclic = akriti::graph::layout_extras::stable_toposort_kahn_by_index(
 
 class ControlFlowAnalyzer {
 private:
-    LiteGraph<NodeId> cfg_;
-    DominatorTree<NodeId> dom_tree_;
-    
+    litegraph::SimpleGraph cfg_;
+
 public:
-    void build_cfg(const std::vector<BasicBlock>& blocks) {
+    void build_cfg(const std::vector<BasicBlock> &blocks) {
         // Build control flow graph from basic blocks
-        for (const auto& block : blocks) {
-            cfg_.add_node(block.id);
-            for (const auto& successor : block.successors) {
-                cfg_.add_edge(block.id, successor);
+        for (const auto &block: blocks) {
+            cfg_.add_node(); // node data can store block payload if desired
+            for (const auto &successor: block.successors) {
+                cfg_.add_edge(litegraph::NodeId{block.id}, litegraph::NodeId{successor});
             }
         }
     }
-    
-    void compute_dominance(NodeId entry) {
-        // Transfer edges to dominator tree
-        for (const auto& [from, adjacents] : cfg_.adjacency_list()) {
-            for (const auto& to : adjacents) {
-                dom_tree_.add_edge(from, to);
-            }
-        }
-        
-        dom_tree_.build(entry);
+
+    // Compute dominator tree on-demand and return it (NAryTree<NodeId>)
+    auto compute_dominance(litegraph::NodeId entry) {
+        return litegraph::compute_dominator_tree(cfg_, entry);
     }
-    
-    std::vector<NodeId> find_optimization_candidates() {
-        std::vector<NodeId> candidates;
-        
+
+    std::vector<litegraph::NodeId> find_optimization_candidates(litegraph::NodeId entry) {
+        auto dom_tree = compute_dominance(entry);
+        std::vector<litegraph::NodeId> candidates;
+
         // Find nodes that dominate multiple successors
-        for (const auto& [node, _] : cfg_.adjacency_list()) {
+        for (const auto &[nid_val, node_obj]: cfg_.nodes()) {
+            litegraph::NodeId node{nid_val};
             size_t dominated_successors = 0;
-            for (const auto& succ : cfg_.neighbors(node)) {
-                if (dom_tree_.dominates(node, succ)) {
+            for (const auto &succ: cfg_.neighbors(node)) {
+                if (litegraph::dominator_analysis::dominates(dom_tree, node, succ)) {
                     ++dominated_successors;
                 }
             }
-            if (dominated_successors > 1) {
-                candidates.push_back(node);
-            }
+            if (dominated_successors > 1) candidates.push_back(node);
         }
-        
+
         return candidates;
     }
 };
@@ -276,43 +283,50 @@ The Lithe EDSL framework now leverages all modernized graph components:
 template<typename ExprType>
 class LitheASTBackend {
     NAryTree<ExprType> ast_;
-    std::unordered_map<std::string, NodeId> symbol_table_;
-    
+    std::unordered_map<std::string, litegraph::NodeId> symbol_table_;
+
 public:
-    NodeId create_expression(const ExprType& expr) {
-        return ast_.create_node(expr);
+    // Create a node containing `expr` and return its NodeId (node_id is assigned internally)
+    litegraph::NodeId create_expression(const ExprType &expr) {
+        auto *node = ast_.insert(nullptr, expr);
+        return litegraph::NodeId{node->node_id};
     }
-    
-    void add_child_expression(NodeId parent, NodeId child) {
-        ast_.add_child(parent, child);
+
+    // Add a child expression under a parent NodeId; returns the new child's NodeId
+    litegraph::NodeId add_child_expression(litegraph::NodeId parent_id, const ExprType &expr) {
+        auto *parent = ast_.find_if([&](const auto &n) { return n.node_id == parent_id.value; });
+        auto *child = ast_.insert(parent, expr);
+        return litegraph::NodeId{child->node_id};
     }
-    
+
     template<typename Visitor>
-    void visit_postorder(Visitor&& visitor) {
-        ast_.traverse_postorder(std::forward<Visitor>(visitor));
+    void visit_postorder(Visitor &&visitor) {
+        for (const auto &node: ast_.post_order()) {
+            visitor(node);
+        }
     }
 };
 
 // Phase 2: Control Flow Analysis using LiteGraph  
 class LitheControlFlow {
-    LiteGraph<NodeId> flow_graph_;
-    DominatorTree<NodeId> dominators_;
-    
+    litegraph::SimpleGraph flow_graph_;
+
 public:
-    void add_control_edge(NodeId from, NodeId to) {
+    void add_control_edge(litegraph::NodeId from, litegraph::NodeId to) {
         flow_graph_.add_edge(from, to);
-        dominators_.add_edge(from, to);
     }
-    
-    void analyze_flow(NodeId entry_point) {
-        dominators_.build(entry_point);
+
+    // Analyze flow by computing dominator tree for the given entry point
+    auto analyze_flow(litegraph::NodeId entry_point) {
+        return litegraph::compute_dominator_tree(flow_graph_, entry_point);
     }
-    
-    bool can_optimize_branch(NodeId branch_node) {
+
+    bool can_optimize_branch(litegraph::NodeId branch_node, const NAryTree<litegraph::NodeId> &dom_tree) {
         // Use dominator information for optimization decisions
-        const auto& successors = flow_graph_.neighbors(branch_node);
-        return std::all_of(successors.begin(), successors.end(),
-            [&](NodeId succ) { return dominators_.dominates(branch_node, succ); });
+        const auto &successors = flow_graph_.neighbors(branch_node);
+        return std::all_of(successors.begin(), successors.end(), [&](litegraph::NodeId succ) {
+            return litegraph::dominator_analysis::dominates(dom_tree, branch_node, succ);
+        });
     }
 };
 
@@ -407,8 +421,38 @@ public:
 
 ---
 
+<a name="comprehensive-algorithm-reference"></a>
 ## 🧪 Comprehensive Algorithm Reference
 
+<a name="graph-algorithms-quick-index"></a>
+## 📌 Graph Algorithms Quick Index
+
+This quick index maps high-level graph algorithms to the primary functions provided in the headers. Use this as a rapid lookup when implementing or porting algorithms.
+
+| Algorithm | Primary function / location | Notes |
+|---|---:|---|
+| Breadth-first search (BFS) | `litegraph::bfs(const GraphT&, NodeId, Fn)` | Visitor-based traversal |
+| Depth-first search (DFS) | `litegraph::dfs(const GraphT&, NodeId, Fn)` | Iterative stack-based traversal |
+| Dijkstra (single-source) | `litegraph::dijkstra(const GraphT&, NodeId, weight_fn)` | Returns (dist, pred) |
+| A* search | `litegraph::a_star_search(const GraphT&, NodeId, NodeId, weight_fn, heuristic_fn)` | Heuristic-guided search |
+| Bellman-Ford | `litegraph::bellman_ford(const GraphT&, NodeId, weight_fn)` | Negative-weight detection |
+| Floyd–Warshall (all-pairs) | `litegraph::floyd_warshall(const GraphT&, weight_fn)` | Returns dist & next matrices |
+| Topological sort (DFS) | `litegraph::topological_sort(const GraphT&)` | DFS-based ordering for DAGs |
+| Stable Kahn topological sort | `akriti::graph::layout_extras::stable_toposort_kahn_by_index(nodes, edges, out_order, cycle_nodes)` | Deterministic Kahn variant with tie-breaking |
+| Cycle detection | `litegraph::has_cycle(const GraphT&)` | Directed/undirected aware |
+| Strongly connected components | `litegraph::strongly_connected_components(const GraphT&)` | Tarjan implementation |
+| Edmonds–Karp (max flow) | `litegraph::edmonds_karp_max_flow(const GraphT&, NodeId, NodeId, capacity_fn)` | Residual BFS-based flow |
+| Kruskal / Prim (MST) | `litegraph::kruskal_mst`, `litegraph::prim_mst` | Undirected weighted MSTs |
+| Subgraph isomorphism (VF2) | `litegraph::vf2_subgraph_isomorphism(pattern, target, node_comp, edge_comp)` | Returns vector of mappings |
+| Graph edit distance (GED) | `litegraph::graph_edit_distance(g1, g2, node_subst_cost, node_ins_cost, ...)` | A*-based GED implementation |
+| Bipartite matching (augmenting-path) | `litegraph::max_bipartite_matching(const GraphT&)` | Returns matching edges |
+| Greedy coloring (serial & parallel) | `litegraph::greedy_graph_coloring`, `litegraph::parallel::parallel_greedy_coloring` | Deterministic ordering for stability |
+| Centrality measures (degree/closeness/betweenness) | `litegraph::degree_centrality`, `litegraph::closeness_centrality`, `litegraph::betweenness_centrality` | Analysis utilities |
+| Parallel Dijkstra | `litegraph::parallel::parallel_dijkstra(policy, graph, source)` | Execution-policy first parameter |
+
+Use the fuller "Comprehensive Algorithm Reference" below for complexities, variants, and code examples.
+
+<a name="core-traversal-algorithms"></a>
 ### Core Traversal Algorithms
 
 | Algorithm | Complexity | Parallel Support | Use Cases |
@@ -417,6 +461,7 @@ public:
 | BFS | O(V + E) | ✅ | Shortest path (unweighted), level-order |
 | Bidirectional BFS | O(V + E) | ✅ | Shortest path optimization |
 
+<a name="shortest-path-algorithms"></a>
 ### Shortest Path Algorithms
 
 | Algorithm | Complexity | Weights | Use Cases |
@@ -426,6 +471,7 @@ public:
 | Floyd-Warshall | O(V³) | Any | All-pairs shortest path |
 | A* | O(b^d) | Heuristic | Pathfinding with admissible heuristic |
 
+<a name="connectivity-algorithms"></a>
 ### Connectivity Algorithms
 
 | Algorithm | Complexity | Graph Type | Output |
@@ -459,6 +505,7 @@ bool dominates_node(const NAryTree<NodeId> &dom_tree, NodeId a, NodeId b);
 
 ---
 
+<a name="best-practices-performance-guidelines"></a>
 ## 💡 Best Practices & Performance Guidelines
 
 ### Memory Management
@@ -488,16 +535,16 @@ void algorithm(const G& graph) {
 ### Performance Optimizations
 ```cpp
 // Reserve capacity for known graph sizes
-LiteGraph<NodeId> graph;
+litegraph::SimpleGraph graph;
 graph.reserve_nodes(10000);
 graph.reserve_edges(50000);
 
 // Use parallel algorithms for large datasets
-auto result = dijkstra(std::execution::par_unseq, graph, source);
+auto result = litegraph::dijkstra(graph, source);
 
-// Prefer batch operations
-std::vector<std::pair<NodeId, NodeId>> edges = get_all_edges();
-graph.add_edges(edges); // More efficient than individual add_edge calls
+// Prefer batch-style construction to minimize overhead (no dedicated add_edges helper in the public API)
+std::vector<std::pair<litegraph::NodeId, litegraph::NodeId>> edges = get_all_edges();
+for (auto [u, v] : edges) graph.add_edge(u, v);
 ```
 
 ---
@@ -521,15 +568,16 @@ class TypeSafeGraph {
 ### Structured Bindings
 ```cpp
 // Modern iteration patterns
-for (const auto& [node_id, adjacents] : graph.adjacency_list()) {
-    for (const auto& neighbor : adjacents) {
-        process_edge(node_id, neighbor);
+for (const auto &[nid_val, node_obj] : graph.nodes()) {
+    litegraph::NodeId nid{nid_val};
+    for (auto neighbor : graph.neighbors(nid)) {
+        process_edge(nid, neighbor);
     }
 }
 
-// Tree traversal with structured bindings
-for (const auto& [depth, node] : tree.traverse_with_depth()) {
-    std::cout << std::string(depth * 2, ' ') << node.data << '\n';
+// Tree traversal (iterators yield TreeNode references)
+for (const auto &node : tree) {
+    std::cout << node.node_id << ": " << node.data << '\n';
 }
 ```
 
@@ -545,43 +593,54 @@ auto leaf_values = tree.leaf_nodes()
 
 ---
 
+<a name="quick-reference-examples"></a>
 ## 📋 Quick Reference & Examples
 
 ### Basic Graph Operations
 ```cpp
-LiteGraph<int> g;
-g.add_edge(1, 2);
-g.add_edge(2, 3);
+using namespace litegraph;
 
-// Check connectivity
-bool connected = has_path(g, 1, 3);
+Graph<int> g;
+auto n1 = g.add_node(1);
+auto n2 = g.add_node(2);
+auto n3 = g.add_node(3);
+g.add_edge(n1, n2);
+g.add_edge(n2, n3);
 
-// Find shortest path
-auto distances = bfs_shortest_path(g.adjacency_list(), 1);
+// BFS traversal
+std::vector<int> seen;
+litegraph::bfs(g, n1, [&](litegraph::NodeId nid, const int &data) { seen.push_back(data); });
+
+// Shortest path (unweighted) via Dijkstra with unit weights
+auto [dist, pred] = litegraph::dijkstra(g, n1, [](auto &&) { return 1.0; });
+auto path = litegraph::reconstruct_path(n3, pred);
 ```
 
 ### Tree Operations
 ```cpp
 NAryTree<std::string> tree;
-auto root = tree.create_root("program");
-auto func_node = tree.add_child(root, "function");
-tree.add_child(func_node, "parameter");
+// Create root
+auto root = tree.insert(nullptr, std::string("program"));
+auto func_node = tree.insert(root, std::string("function"));
+tree.insert(func_node, std::string("parameter"));
 
-// Serialize for persistence  
+// Serialize for persistence
 std::ofstream file("ast.txt");
 tree.serialize(file);
 ```
 
 ### Dominator Analysis
 ```cpp
-DominatorTree<NodeId> dom;
-// Build CFG edges
-dom.add_edge(entry, block1);
-dom.add_edge(block1, block2);
-dom.build(entry);
+using namespace litegraph;
+SimpleGraph cfg;
+auto e = cfg.add_node();
+auto b1 = cfg.add_node();
+auto b2 = cfg.add_node();
+cfg.add_edge(e, b1);
+cfg.add_edge(b1, b2);
 
-// Query dominance
-if (dom.dominates(entry, block2)) {
+auto dom = litegraph::compute_dominator_tree(cfg, e);
+if (litegraph::dominator_analysis::dominates(dom, e, b2)) {
     // Safe to optimize
 }
 ```
