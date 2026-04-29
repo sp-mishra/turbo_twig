@@ -584,23 +584,6 @@ namespace litegraph {
         return Graph<Args..., Undirected>{std::forward<Args>(args)...};
     }
 
-    // Provide equality comparisons for strong ID types used as map/set keys.
-    inline bool operator==(const NodeId &a, const NodeId &b) noexcept {
-        return a.value == b.value;
-    }
-
-    inline bool operator==(const EdgeId &a, const EdgeId &b) noexcept {
-        return a.value == b.value;
-    }
-
-    // Provide ordering comparisons for strong ID types used as ordered-map keys.
-    inline bool operator<(const NodeId &a, const NodeId &b) noexcept {
-        return a.value < b.value;
-    }
-
-    inline bool operator<(const EdgeId &a, const EdgeId &b) noexcept {
-        return a.value < b.value;
-    }
 } // namespace litegraph
 
 namespace std {
