@@ -385,6 +385,102 @@ TEST_CASE("[LiteGraph] CSR BFS results align with Graph BFS on path", "[LiteGrap
     REQUIRE(csr_order[3].value == graph_order[3].value);
 }
 
+TEST_CASE("[LiteGraph] CSR PageRank on small directed graph", "[LiteGraph][CSR][PageRank]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+
+    // Directed 3-cycle should produce equal ranks.
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n0, 1);
+
+    const auto csr = freeze_to_csr(g);
+    CsrPageRankOptions opts;
+    opts.damping_factor = 0.85;
+    opts.max_iterations = 200;
+    opts.tolerance = 1e-12;
+
+    const auto pr = pagerank(csr, opts);
+    REQUIRE(pr.ranks.size() == csr.node_count());
+    REQUIRE(pr.converged);
+    REQUIRE(pr.iterations <= opts.max_iterations);
+
+    const auto c0 = csr.compact_index(n0).value();
+    const auto c1 = csr.compact_index(n1).value();
+    const auto c2 = csr.compact_index(n2).value();
+    REQUIRE(pr.ranks[c0] == Catch::Approx(1.0 / 3.0).margin(1e-6));
+    REQUIRE(pr.ranks[c1] == Catch::Approx(1.0 / 3.0).margin(1e-6));
+    REQUIRE(pr.ranks[c2] == Catch::Approx(1.0 / 3.0).margin(1e-6));
+}
+
+TEST_CASE("[LiteGraph] CSR PageRank ranks sum to one", "[LiteGraph][CSR][PageRank]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n0, 1);
+    g.add_edge(n2, n3, 1);
+
+    const auto csr = freeze_to_csr(g);
+    const auto pr = pagerank(csr);
+
+    double sum = 0.0;
+    for (const double r : pr.ranks) sum += r;
+    REQUIRE(sum == Catch::Approx(1.0).margin(1e-9));
+}
+
+TEST_CASE("[LiteGraph] CSR PageRank handles dangling and isolated nodes", "[LiteGraph][CSR][PageRank]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2); // isolated/dangling
+
+    g.add_edge(n0, n1, 1); // n1 is dangling; n2 is isolated dangling
+
+    const auto csr = freeze_to_csr(g);
+    CsrPageRankOptions opts;
+    opts.max_iterations = 300;
+    opts.tolerance = 1e-10;
+    const auto pr = pagerank(csr, opts);
+
+    REQUIRE(pr.converged);
+    REQUIRE(pr.ranks.size() == csr.node_count());
+    for (const double r : pr.ranks) {
+        REQUIRE(r > 0.0);
+    }
+
+    double sum = 0.0;
+    for (const double r : pr.ranks) sum += r;
+    REQUIRE(sum == Catch::Approx(1.0).margin(1e-9));
+}
+
+TEST_CASE("[LiteGraph] CSR PageRank convergence respects max_iterations", "[LiteGraph][CSR][PageRank]") {
+    Graph<int, int, Directed> g;
+    const auto n0 = g.add_node(0);
+    const auto n1 = g.add_node(1);
+    const auto n2 = g.add_node(2);
+    const auto n3 = g.add_node(3);
+
+    g.add_edge(n0, n1, 1);
+    g.add_edge(n1, n2, 1);
+    g.add_edge(n2, n3, 1);
+    g.add_edge(n3, n0, 1);
+
+    const auto csr = freeze_to_csr(g);
+    CsrPageRankOptions opts;
+    opts.max_iterations = 25;
+    opts.tolerance = 1e-9;
+
+    const auto pr = pagerank(csr, opts);
+    REQUIRE(pr.iterations <= opts.max_iterations);
+}
+
 TEST_CASE("[LiteGraph] BFS and DFS traversal", "[LiteGraph]") {
     Graph<int, int, Undirected> g;
     auto n0 = g.add_node(1);

@@ -19,6 +19,7 @@
 #include <span>
 #include <deque>
 #include <cstdint>
+#include <cmath>
 
 namespace litegraph {
     // Additional error types for algorithms
@@ -160,6 +161,18 @@ namespace litegraph {
         std::vector<std::optional<std::size_t> > predecessors;
     };
 
+    struct CsrPageRankOptions {
+        double damping_factor = 0.85;
+        std::size_t max_iterations = 100;
+        double tolerance = 1e-9;
+    };
+
+    struct CsrPageRankResult {
+        std::vector<double> ranks;
+        std::size_t iterations = 0;
+        bool converged = false;
+    };
+
     template<typename EdgeT, DirectednessTag Directedness>
     CsrBfsResult bfs(const CsrGraph<EdgeT, Directedness> &g, const std::size_t start_compact_index) {
         if (start_compact_index >= g.node_count()) {
@@ -207,6 +220,68 @@ namespace litegraph {
             throw std::out_of_range("CSR BFS start node is not active in the frozen graph.");
         }
         return bfs(g, *compact_index);
+    }
+
+    template<typename EdgeT, DirectednessTag Directedness>
+    CsrPageRankResult pagerank(const CsrGraph<EdgeT, Directedness> &g,
+                               const CsrPageRankOptions &options = {}) {
+        if (options.damping_factor < 0.0 || options.damping_factor > 1.0) {
+            throw std::invalid_argument("PageRank damping_factor must be in [0, 1].");
+        }
+
+        const std::size_t n = g.node_count();
+        if (n == 0) {
+            return {};
+        }
+
+        const auto &offsets = g.offsets();
+        const auto &targets = g.targets();
+
+        std::vector<double> rank(n, 1.0 / static_cast<double>(n));
+        std::vector<double> next_rank(n, 0.0);
+
+        CsrPageRankResult result;
+        result.ranks = rank;
+
+        const double d = options.damping_factor;
+        for (std::size_t iter = 0; iter < options.max_iterations; ++iter) {
+            double dangling_mass = 0.0;
+            for (std::size_t u = 0; u < n; ++u) {
+                if (offsets[u] == offsets[u + 1]) {
+                    dangling_mass += rank[u];
+                }
+            }
+
+            const double base = (1.0 - d) / static_cast<double>(n)
+                              + d * dangling_mass / static_cast<double>(n);
+            std::fill(next_rank.begin(), next_rank.end(), base);
+
+            for (std::size_t u = 0; u < n; ++u) {
+                const std::size_t out_degree = offsets[u + 1] - offsets[u];
+                if (out_degree == 0) continue;
+
+                const double contrib = d * rank[u] / static_cast<double>(out_degree);
+                for (std::size_t i = offsets[u]; i < offsets[u + 1]; ++i) {
+                    next_rank[targets[i].value] += contrib;
+                }
+            }
+
+            double delta = 0.0;
+            for (std::size_t i = 0; i < n; ++i) {
+                delta += std::abs(next_rank[i] - rank[i]);
+            }
+
+            rank.swap(next_rank);
+            result.iterations = iter + 1;
+
+            if (delta <= options.tolerance) {
+                result.converged = true;
+                break;
+            }
+        }
+
+        result.ranks = std::move(rank);
+        return result;
     }
 
     // ----------- Breadth-First Search (BFS) -----------
