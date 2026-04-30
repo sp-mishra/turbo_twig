@@ -11,7 +11,7 @@
 #include <ranges>
 #include <source_location>
 #include <string>
-#include "utils/Log.hpp"
+#include "utils/log.hpp"
 #include <span>
 #include <string_view>
 

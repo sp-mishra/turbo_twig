@@ -1,5 +1,5 @@
 #include "test/example_registry.hpp"
-#include "utils/Log.hpp"
+#include "utils/log.hpp"
 
 #include <array>
 #include <cstddef>
