@@ -24,6 +24,21 @@
 #include <type_traits>
 #include <string>
 
+#if defined(GROKLAB_LOG_ENABLED) && !defined(LG_LOG_ENABLED)
+  /* Backwards-compatibility: if the old macro is defined, respect it. */
+  #define LG_LOG_ENABLED GROKLAB_LOG_ENABLED
+#endif
+
+#if defined(GROKLAB_LOG_ENABLED) && !defined(LG_LOG_ENABLED)
+  /* Backwards-compatibility: if the old macro is defined, respect it. */
+  #define LG_LOG_ENABLED GROKLAB_LOG_ENABLED
+#endif
+
+#if defined(GROKLAB_LOG_ENABLED) && !defined(LG_LOG_ENABLED)
+  /* Backwards-compatibility: if the old macro is defined, respect it. */
+  #define LG_LOG_ENABLED GROKLAB_LOG_ENABLED
+#endif
+
 #ifndef LG_LOG_ENABLED
 #define LG_LOG_ENABLED 1
 #endif
@@ -47,9 +62,23 @@ namespace lg::log {
 } // namespace lg::log
 
 
-// Include spdlog only when logging is enabled.
+// Include spdlog only when logging is enabled. If spdlog headers are not
+// available, automatically disable the compile-time logging switch to avoid
+// hard failures when the user compiled with LG_LOG_ENABLED=1 but does not
+// have spdlog installed.
 #if LG_LOG_ENABLED
-#include <spdlog/spdlog.h>
+  #if defined(__has_include)
+    #if __has_include(<spdlog/spdlog.h>)
+      #include <spdlog/spdlog.h>
+    #else
+      /* spdlog not found; disable logging to avoid missing header errors */
+      #undef LG_LOG_ENABLED
+      #define LG_LOG_ENABLED 0
+    #endif
+  #else
+    /* Compiler doesn't support __has_include: try to include and hope for the best */
+    #include <spdlog/spdlog.h>
+  #endif
 #endif
 
 namespace lg {
