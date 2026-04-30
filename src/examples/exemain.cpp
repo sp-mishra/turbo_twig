@@ -1,4 +1,4 @@
-#include "test/static_example_registry.hpp"
+#include "test/example_registry.hpp"
 
 #include <array>
 #include <cstddef>
