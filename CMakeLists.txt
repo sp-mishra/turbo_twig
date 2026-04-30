@@ -50,7 +50,17 @@ set(HWY_ENABLE_INSTALL OFF)
 set(HWY_ENABLE_TESTS OFF)
 set(HWY_BUILD_TESTS OFF)
 
+# Spdlog
+set(SPDLOG_BUILD_EXAMPLES OFF)
+set(SPDLOG_USE_STD_FORMAT ON)
+set(SPDLOG_BUILD_SHARED OFF)
+set(SPDLOG_ENABLE_PCH OFF)
+set(SPDLOG_BUILD_EXAMPLE OFF)
+set(SPDLOG_BUILD_TESTS OFF)
+set(SPDLOG_BUILD_BENCH OFF)
+
 add_subdirectory(${CMAKE_SOURCE_DIR}/dependencies/highway)
+add_subdirectory(${CMAKE_SOURCE_DIR}/dependencies/spdlog)
 
 # ===================== MLX (Apple GPU/CPU ML framework) =======================
 option(BUILD_MLX "Build with MLX support" ON)
@@ -123,6 +133,7 @@ if (BUILD_EXECUTABLE)
     add_executable(${PROJECT_NAME} ${APP_SOURCE})
     target_link_libraries(${PROJECT_NAME} PRIVATE
             hwy
+            spdlog::spdlog_header_only
     )
 endif ()
 
@@ -135,6 +146,7 @@ if (BUILD_TESTS)
     target_link_libraries(turbo_twig_tests PRIVATE
             Catch2
             hwy
+            spdlog::spdlog_header_only
     )
     if(HAS_MLX)
         target_link_libraries(turbo_twig_tests PRIVATE mlx)
