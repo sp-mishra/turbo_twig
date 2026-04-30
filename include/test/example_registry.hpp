@@ -1,12 +1,14 @@
-#ifndef TESTFW_STATIC_EXAMPLE_REGISTRY_HPP
-#define TESTFW_STATIC_EXAMPLE_REGISTRY_HPP
+#pragma once
+
+#ifndef TESTFW_EXAMPLE_REGISTRY_HPP
+#define TESTFW_EXAMPLE_REGISTRY_HPP
 
 #include <algorithm>
 #include <array>
 #include <concepts>
 #include <expected>
-#include <format>
 #include <iostream>
+#include <ranges>
 #include <source_location>
 #include <span>
 #include <string_view>
@@ -75,7 +77,11 @@ class Registry {
 public:
     static int run_all() {
         int failed = 0;
-        ((execute<Examples>() ? void() : void(++failed)), ...);
+        ([&] {
+            if (!execute<Examples>()) {
+                ++failed;
+            }
+        }(), ...);
         return failed > 0 ? 2 : 0;
     }
 
@@ -83,7 +89,7 @@ public:
         bool passed = true;
         bool found = (match_and_run<Examples>(target, passed) || ...);
         if (!found) {
-            std::cout << std::format("Error: example '{}' not found\n", target);
+            std::cerr << "Error: example '" << target << "' not found\n";
             return 1;
         }
         return passed ? 0 : 2;
@@ -94,7 +100,7 @@ public:
         bool found = false;
         (tag_run<Examples>(tag, failed, found), ...);
         if (!found) {
-            std::cout << std::format("Error: no examples with tag '{}'\n", tag);
+            std::cerr << "Error: no examples with tag '" << tag << "'\n";
             return 1;
         }
         return failed > 0 ? 2 : 0;
@@ -166,18 +172,15 @@ private:
 
     template <ExampleType T>
     static auto execute() -> bool {
-        std::cout << std::format("[RUNNING] {}\n", std::string_view{T::name()});
+        std::cout << "[RUNNING] " << T::name() << "\n";
         Result result = invoke<T>();
         if (result) {
-            std::cout << std::format("[PASSED]  {}\n", std::string_view{T::name()});
+            std::cout << "[PASSED]  " << T::name() << "\n";
             return true;
         } else {
             const auto& err = result.error();
-            std::cout << std::format("[FAILED]  {}: {} ({}:{})\n",
-                std::string_view{T::name()},
-                err.message,
-                err.where.file_name(),
-                err.where.line());
+            std::cerr << "[FAILED]  " << T::name() << ": " << err.message
+                      << " (" << err.where.file_name() << ":" << err.where.line() << ")\n";
             return false;
         }
     }
@@ -210,7 +213,7 @@ private:
     template <ExampleType T>
     static void print_entry() {
         auto tags = std::span<const std::string_view>{T::tags()};
-        std::cout << std::format("  {:20s} - {} [", std::string_view{T::name()}, std::string_view{T::description()});
+        std::cout << "  " << T::name() << " - " << T::description() << " [";
         for (std::size_t i = 0; i < tags.size(); ++i) {
             if (i > 0) std::cout << ", ";
             std::cout << tags[i];
@@ -221,4 +224,4 @@ private:
 
 } // namespace testfw
 
-#endif // TESTFW_STATIC_EXAMPLE_REGISTRY_HPP
+#endif // TESTFW_EXAMPLE_REGISTRY_HPP
