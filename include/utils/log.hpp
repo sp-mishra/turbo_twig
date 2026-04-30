@@ -11,8 +11,8 @@
 // - Allow compile-time disable via compiler flags (recommended) or a single macro.
 //
 // Compile-time switch:
-//   -DGROKLAB_LOG_ENABLED=0   // hard-disables all logging calls (they become no-ops)
-//   -DGROKLAB_LOG_ENABLED=1   // enables logging (default)
+//   -DLG_LOG_ENABLED=0   // hard-disables all logging calls (they become no-ops)
+//   -DLG_LOG_ENABLED=1   // enables logging (default)
 //
 // Note on argument evaluation:
 // With function-based logging, arguments are evaluated before the call.
@@ -24,13 +24,13 @@
 #include <type_traits>
 #include <string>
 
-#ifndef GROKLAB_LOG_ENABLED
-#define GROKLAB_LOG_ENABLED 1
+#ifndef LG_LOG_ENABLED
+#define LG_LOG_ENABLED 1
 #endif
 
 
 namespace lg::log {
-    inline constexpr bool enabled = (GROKLAB_LOG_ENABLED != 0);
+    inline constexpr bool enabled = (LG_LOG_ENABLED != 0);
 
     // Small helper for "unused" suppression without generating code.
     template<class... Ts>
@@ -48,7 +48,7 @@ namespace lg::log {
 
 
 // Include spdlog only when logging is enabled.
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
 #include <spdlog/spdlog.h>
 #endif
 
@@ -57,14 +57,14 @@ namespace lg {
 
     template<typename... Args>
     inline void info(
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
         spdlog::format_string_t<Args...> fmt,
 #else
         std::string_view fmt,
 #endif
         Args &&... args) {
         if constexpr (log::enabled) {
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
             spdlog::info(fmt, std::forward<Args>(args)...);
 #else
             log::swallow(fmt, std::forward<Args>(args)...);
@@ -76,14 +76,14 @@ namespace lg {
 
     template<typename... Args>
     inline void warn(
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
         spdlog::format_string_t<Args...> fmt,
 #else
         std::string_view fmt,
 #endif
         Args &&... args) {
         if constexpr (log::enabled) {
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
             spdlog::warn(fmt, std::forward<Args>(args)...);
 #else
             log::swallow(fmt, std::forward<Args>(args)...);
@@ -95,14 +95,14 @@ namespace lg {
 
     template<typename... Args>
     inline void error(
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
         spdlog::format_string_t<Args...> fmt,
 #else
         std::string_view fmt,
 #endif
         Args &&... args) {
         if constexpr (log::enabled) {
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
             spdlog::error(fmt, std::forward<Args>(args)...);
 #else
             log::swallow(fmt, std::forward<Args>(args)...);
@@ -114,14 +114,14 @@ namespace lg {
 
     template<typename... Args>
     inline void debug(
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
         spdlog::format_string_t<Args...> fmt,
 #else
         std::string_view fmt,
 #endif
         Args &&... args) {
         if constexpr (log::enabled) {
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
             spdlog::debug(fmt, std::forward<Args>(args)...);
 #else
             log::swallow(fmt, std::forward<Args>(args)...);
@@ -133,14 +133,14 @@ namespace lg {
 
     template<typename... Args>
     inline void critical(
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
         spdlog::format_string_t<Args...> fmt,
 #else
         std::string_view fmt,
 #endif
         Args &&... args) {
         if constexpr (log::enabled) {
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
             spdlog::critical(fmt, std::forward<Args>(args)...);
 #else
             log::swallow(fmt, std::forward<Args>(args)...);
@@ -156,7 +156,7 @@ namespace lg {
     namespace log {
         inline void set_level(int level) noexcept {
             if constexpr (enabled) {
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
                 spdlog::set_level(static_cast<spdlog::level::level_enum>(level));
 #else
                 (void) level;
@@ -168,7 +168,7 @@ namespace lg {
 
         inline void set_pattern(std::string_view pattern) noexcept {
             if constexpr (enabled) {
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
                 spdlog::set_pattern(std::string(pattern));
 #else
                 (void) pattern;
@@ -180,7 +180,7 @@ namespace lg {
 
         inline void flush_on(int level) noexcept {
             if constexpr (enabled) {
-#if GROKLAB_LOG_ENABLED
+#if LG_LOG_ENABLED
                 spdlog::flush_on(static_cast<spdlog::level::level_enum>(level));
 #else
                 (void) level;
