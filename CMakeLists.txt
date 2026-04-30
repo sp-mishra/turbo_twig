@@ -135,6 +135,10 @@ if (BUILD_EXECUTABLE)
             hwy
             spdlog::spdlog_header_only
     )
+    if(HAS_MLX)
+        target_link_libraries(${PROJECT_NAME} PRIVATE mlx)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_MLX=1)
+    endif()
 endif ()
 
 if (BUILD_TESTS)
