@@ -1,4 +1,5 @@
 #include "test/example_registry.hpp"
+#include "utils/Log.hpp"
 
 #include <array>
 #include <cstddef>
@@ -34,10 +35,10 @@ struct StorageExample {
     static constexpr std::array<std::string_view, 2> tag_data{"storage", "lifecycle"};
     static constexpr std::span<const std::string_view> tags() { return tag_data; }
 
-    std::unique_ptr<std::array<std::byte, 64>> buffer;
+    std::unique_ptr<std::array<std::byte, 64> > buffer;
 
     testfw::Result setup() {
-        buffer = std::make_unique<std::array<std::byte, 64>>();
+        buffer = std::make_unique<std::array<std::byte, 64> >();
         buffer->fill(std::byte{0xAB});
         if (!buffer) {
             return testfw::fail("failed to allocate buffer");
@@ -83,9 +84,9 @@ struct FailingExample {
 
 using ExampleRegistry = testfw::Registry<StaticPass, StorageExample, FailingExample>;
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     if (argc < 2) {
-        std::cout << "Usage: examples [--list | --all | --filter <tag> | <name>]\n";
+        lg::info("Usage: examples [--list | --all | --filter <tag> | <name>]");
         return 1;
     }
 
@@ -102,7 +103,7 @@ int main(int argc, char* argv[]) {
 
     if (arg == "--filter") {
         if (argc < 3) {
-            std::cout << "Usage: examples [--list | --all | --filter <tag> | <name>]\n";
+            lg::info("Usage: examples [--list | --all | --filter <tag> | <name>]");
             return 1;
         }
         return ExampleRegistry::run_by_tag(std::string_view{argv[2]});
