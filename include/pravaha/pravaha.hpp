@@ -166,9 +166,30 @@ class TaskCommand {
 
     template <typename F>
     static Outcome<Unit> invoke_impl(void* s) noexcept {
-        try { (*std::launder(reinterpret_cast<F*>(s)))(); return Unit{}; }
-        catch (const std::exception& e) { return std::unexpected(PravahaError{ErrorKind::TaskFailed, std::string{"TaskCommand exception: "} + e.what()}); }
-        catch (...) { return std::unexpected(PravahaError{ErrorKind::TaskFailed, "TaskCommand: unknown exception"}); }
+        try {
+            F& fn = *std::launder(reinterpret_cast<F*>(s));
+            using R = std::invoke_result_t<F&>;
+
+            if constexpr (std::is_void_v<R>) {
+                fn();
+                return Outcome<Unit>{Unit{}};
+            } else if constexpr (std::same_as<std::remove_cvref_t<R>, Unit>) {
+                (void)fn();
+                return Outcome<Unit>{Unit{}};
+            } else if constexpr (std::same_as<std::remove_cvref_t<R>, Outcome<Unit>>) {
+                return fn();
+            } else {
+                // v0.1 compatibility: invoke unsupported return types and treat as success.
+                (void)fn();
+                return Outcome<Unit>{Unit{}};
+            }
+        }
+        catch (const std::exception& e) {
+            return std::unexpected(PravahaError{ErrorKind::TaskFailed, e.what()});
+        }
+        catch (...) {
+            return std::unexpected(PravahaError{ErrorKind::TaskFailed, "unknown exception"});
+        }
     }
     template <typename F>
     static void move_impl(void* d, void* s) noexcept { ::new(d) F(std::move(*std::launder(reinterpret_cast<F*>(s)))); std::launder(reinterpret_cast<F*>(s))->~F(); }
