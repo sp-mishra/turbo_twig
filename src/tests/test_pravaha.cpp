@@ -1249,6 +1249,21 @@ TEST_CASE("Domain - error kind is DomainConstraintViolation", "[pravaha][domain]
 // SECTION 22: Textual Pipeline Parsing (Lithe)
 // ============================================================================
 
+TEST_CASE("lithe_bridge - keyword exact match", "[pravaha][parse][lithe]") {
+    REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("pipeline", "pipeline"));
+    REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("pipelineX", "pipeline"));
+    REQUIRE(pravaha::symbolic::lithe_bridge::is_pipeline_keyword("pipeline"));
+    REQUIRE(pravaha::symbolic::lithe_bridge::is_then_keyword("then"));
+    REQUIRE(pravaha::symbolic::lithe_bridge::is_parallel_keyword("parallel"));
+}
+
+TEST_CASE("lithe_bridge - reserved keyword cannot be identifier", "[pravaha][parse][lithe]") {
+    REQUIRE(pravaha::symbolic::lithe_bridge::is_reserved_keyword("pipeline"));
+    REQUIRE(pravaha::symbolic::lithe_bridge::is_reserved_keyword("then"));
+    REQUIRE(pravaha::symbolic::lithe_bridge::is_reserved_keyword("parallel"));
+    REQUIRE(!pravaha::symbolic::lithe_bridge::identifier_matches("then"));
+}
+
 TEST_CASE("parse_pipeline - simple sequence", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then b then c }");
     REQUIRE(result.has_value());
@@ -1331,6 +1346,18 @@ TEST_CASE("parse_pipeline - same dependency shape as C++ DSL", "[pravaha][parse]
 
 TEST_CASE("parse_pipeline - invalid syntax returns ParseError", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("not_a_pipeline { }");
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+}
+
+TEST_CASE("parse_pipeline - rejects pipelinex keyword", "[pravaha][parse][lithe]") {
+    auto result = pravaha::parse_pipeline("pipelinex p { a then b }");
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+}
+
+TEST_CASE("parse_pipeline - rejects reserved identifier then", "[pravaha][parse][lithe]") {
+    auto result = pravaha::parse_pipeline("pipeline p { then }");
     REQUIRE(!result.has_value());
     REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
 }

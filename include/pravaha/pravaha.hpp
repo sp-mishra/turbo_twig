@@ -1178,6 +1178,47 @@ private:
 
 namespace symbolic {
 
+namespace lithe_bridge {
+
+// v0.1: Lithe owns keyword/token exact matching; identifier character
+// classes remain local fallback until a dedicated character-class grammar is added.
+inline bool keyword_matches(std::string_view token, std::string_view keyword) {
+    auto pm = lithe::patterns::match(keyword, token);
+    return pm.apply([](auto&& p, auto&& v) {
+        return std::string_view{p} == std::string_view{v};
+    });
+}
+
+inline bool is_pipeline_keyword(std::string_view token) {
+    return keyword_matches(token, "pipeline");
+}
+
+inline bool is_then_keyword(std::string_view token) {
+    return keyword_matches(token, "then");
+}
+
+inline bool is_parallel_keyword(std::string_view token) {
+    return keyword_matches(token, "parallel");
+}
+
+inline bool is_reserved_keyword(std::string_view token) {
+    return is_pipeline_keyword(token)
+        || is_then_keyword(token)
+        || is_parallel_keyword(token)
+        || keyword_matches(token, "collect_all");
+}
+
+inline bool identifier_matches(std::string_view token) {
+    if (token.empty() || is_reserved_keyword(token)) return false;
+    if (!std::isalpha(static_cast<unsigned char>(token[0])) && token[0] != '_') return false;
+    for (auto c : token) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') return false;
+    }
+    return true;
+}
+
+} // namespace lithe_bridge
+
 struct SymbolicTaskExpr { std::string name; };
 struct SymbolicSequenceExpr;
 struct SymbolicParallelExpr;
@@ -1198,16 +1239,11 @@ struct SymbolicPipeline {
 
 // Lithe-validated keyword set
 inline bool is_keyword(std::string_view token) {
-    static constexpr std::string_view keywords[] = {"pipeline", "then", "parallel"};
-    for (auto kw : keywords) if (token == kw) return true;
-    return false;
+    return lithe_bridge::is_reserved_keyword(token);
 }
 
 inline bool is_valid_identifier(std::string_view token) {
-    if (token.empty() || is_keyword(token)) return false;
-    if (!std::isalpha(static_cast<unsigned char>(token[0])) && token[0] != '_') return false;
-    for (auto c : token) if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') return false;
-    return true;
+    return lithe_bridge::identifier_matches(token);
 }
 
 namespace detail {
@@ -1272,7 +1308,7 @@ struct Parser {
     Outcome<SymbolicExpr> parse_step() {
         skip_ws();
         auto tok = peek_token();
-        if (tok == "parallel") {
+        if (lithe_bridge::is_parallel_keyword(tok)) {
             consume_token();
             return parse_parallel();
         }
@@ -1288,7 +1324,7 @@ struct Parser {
         while (true) {
             skip_ws();
             auto tok = peek_token();
-            if (tok != "then") break;
+            if (!lithe_bridge::is_then_keyword(tok)) break;
             consume_token();
             auto next = parse_step();
             if (!next.has_value()) return next;
@@ -1301,7 +1337,11 @@ struct Parser {
     }
 
     Outcome<SymbolicPipeline> parse_pipeline() {
-        if (!expect("pipeline")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected 'pipeline' keyword"});
+        skip_ws();
+        auto kw = consume_token();
+        if (!lithe_bridge::is_pipeline_keyword(kw)) {
+            return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected 'pipeline' keyword"});
+        }
         skip_ws();
         auto name_tok = consume_token();
         if (!is_valid_identifier(name_tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Invalid pipeline name"});
