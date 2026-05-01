@@ -1391,15 +1391,25 @@ TEST_CASE("pravaha lithe frontend creates token expressions", "[pravaha][parse][
     REQUIRE(h1 == h2);
 }
 
-TEST_CASE("pravaha lithe frontend exact keyword matching", "[pravaha][parse][lithe]") {
+TEST_CASE("pravaha lithe frontend keyword matching", "[pravaha][parse][lithe]") {
     using pravaha::symbolic::lithe_frontend::keyword_matches;
+    using pravaha::symbolic::lithe_frontend::is_collect_all_keyword;
+    using pravaha::symbolic::lithe_frontend::is_parallel_keyword;
+    using pravaha::symbolic::lithe_frontend::is_pipeline_keyword;
     using pravaha::symbolic::lithe_frontend::is_reserved_keyword;
+    using pravaha::symbolic::lithe_frontend::is_then_keyword;
 
     REQUIRE(keyword_matches("pipeline", "pipeline"));
     REQUIRE(!keyword_matches("pipelineX", "pipeline"));
     REQUIRE(!keyword_matches("xpipeline", "pipeline"));
     REQUIRE(!keyword_matches("", "pipeline"));
     REQUIRE(!keyword_matches("pipeline", ""));
+
+    REQUIRE(is_pipeline_keyword("pipeline"));
+    REQUIRE(is_then_keyword("then"));
+    REQUIRE(is_parallel_keyword("parallel"));
+    REQUIRE(is_collect_all_keyword("collect_all"));
+
     REQUIRE(is_reserved_keyword("then"));
     REQUIRE(!is_reserved_keyword("normal_task"));
 }
@@ -1409,6 +1419,7 @@ TEST_CASE("pravaha lithe frontend identifier validation", "[pravaha][parse][lith
 
     REQUIRE(identifier_matches("a"));
     REQUIRE(identifier_matches("load_config"));
+    REQUIRE(identifier_matches("start_cache"));
     REQUIRE(identifier_matches("_internal"));
     REQUIRE(identifier_matches("task_1"));
 
@@ -1443,7 +1454,7 @@ TEST_CASE("pravaha lithe frontend captures tokens", "[pravaha][parse][lithe]") {
     REQUIRE(reserved.error().kind == pravaha::ErrorKind::ParseError);
 }
 
-TEST_CASE("pravaha lithe frontend parses pipeline header", "[pravaha][parse][lithe]") {
+TEST_CASE("pravaha lithe frontend pipeline header", "[pravaha][parse][lithe]") {
     using pravaha::symbolic::lithe_frontend::parse_pipeline_header;
 
     {
@@ -1493,12 +1504,14 @@ TEST_CASE("pravaha lithe frontend parses pipeline header", "[pravaha][parse][lit
     }
 }
 
-TEST_CASE("pravaha lithe frontend parses parallel intro", "[pravaha][parse][lithe]") {
+TEST_CASE("pravaha lithe frontend parallel intro", "[pravaha][parse][lithe]") {
     using pravaha::symbolic::lithe_frontend::parse_parallel_intro;
 
     {
-        auto parsed = parse_parallel_intro("parallel { a, b }", 0);
+        constexpr std::string_view src = "parallel { a, b }";
+        auto parsed = parse_parallel_intro(src, 0);
         REQUIRE(parsed.has_value());
+        REQUIRE(parsed->body_start_offset == src.find('{') + 1);
         REQUIRE(parsed->lithe_hash != 0);
         REQUIRE(parsed->lithe_dump.find("pravaha.parallel") != std::string::npos);
     }
@@ -1535,17 +1548,15 @@ TEST_CASE("parse_pipeline - simple sequence", "[pravaha][parse]") {
     REQUIRE(result.value().name == "p");
 }
 
-TEST_CASE("parse_pipeline stores lithe frontend metadata", "[pravaha][parse][lithe]") {
-    auto result = pravaha::parse_pipeline("pipeline p { a }");
+TEST_CASE("parse_pipeline produces lithe frontend metadata", "[pravaha][parse][lithe]") {
+    auto result = pravaha::parse_pipeline("pipeline p { a then b }");
     REQUIRE(result.has_value());
     REQUIRE(result->frontend.hash != 0);
     REQUIRE_FALSE(result->frontend.dump.empty());
 
-    auto* task = std::get_if<pravaha::symbolic::SymbolicTaskExpr>(&result->root);
-    REQUIRE(task != nullptr);
-    REQUIRE(task->name == "a");
-    REQUIRE(task->frontend.hash != 0);
-    REQUIRE_FALSE(task->frontend.dump.empty());
+    const auto root_meta = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(result->root);
+    REQUIRE(root_meta.hash != 0);
+    REQUIRE_FALSE(root_meta.dump.empty());
 }
 
 TEST_CASE("parse_pipeline uses lithe frontend header", "[pravaha][parse][lithe]") {
@@ -1647,7 +1658,7 @@ TEST_CASE("parse_pipeline uses lithe frontend parallel intro", "[pravaha][parse]
     }
 }
 
-TEST_CASE("parse_pipeline builds stable lithe frontend signature for full symbolic shape", "[pravaha][parse][lithe]") {
+TEST_CASE("lithe frontend structural hash is stable", "[pravaha][parse][lithe]") {
     auto seq_ab_1 = pravaha::parse_pipeline("pipeline p { a then b }");
     auto seq_ab_2 = pravaha::parse_pipeline("pipeline p { a then b }");
     auto seq_ba = pravaha::parse_pipeline("pipeline p { b then a }");
@@ -1657,6 +1668,8 @@ TEST_CASE("parse_pipeline builds stable lithe frontend signature for full symbol
     REQUIRE(seq_ab_2.has_value());
     REQUIRE(seq_ba.has_value());
     REQUIRE(par_ab.has_value());
+
+    REQUIRE(seq_ab_1->frontend.hash == seq_ab_2->frontend.hash);
 
     const auto seq_meta_1 = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ab_1->root);
     const auto seq_meta_2 = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ab_2->root);
@@ -1668,6 +1681,33 @@ TEST_CASE("parse_pipeline builds stable lithe frontend signature for full symbol
     REQUIRE(seq_meta_1.hash == seq_meta_2.hash);
     REQUIRE(seq_meta_1.hash != seq_meta_ba.hash);
     REQUIRE(seq_meta_1.hash != par_meta.hash);
+}
+
+TEST_CASE("reserved textual keywords are rejected as task identifiers", "[pravaha][parse][lithe]") {
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { then }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+        const bool ok = result.error().message.find("reserved") != std::string::npos
+            || result.error().message.find("identifier") != std::string::npos;
+        REQUIRE(ok);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { parallel }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+        const bool ok = result.error().message.find("reserved") != std::string::npos
+            || result.error().message.find("identifier") != std::string::npos;
+        REQUIRE(ok);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { collect_all }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+        const bool ok = result.error().message.find("reserved") != std::string::npos
+            || result.error().message.find("identifier") != std::string::npos;
+        REQUIRE(ok);
+    }
 }
 
 TEST_CASE("pravaha textual frontend is lithe-backed", "[pravaha][parse][lithe]") {
@@ -1737,7 +1777,7 @@ TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
     REQUIRE(result.value().name == "p");
 }
 
-TEST_CASE("parse_pipeline - parallel intro via lithe bridge works", "[pravaha][parse][lithe]") {
+TEST_CASE("parse_pipeline - parallel intro via lithe frontend works", "[pravaha][parse][lithe]") {
     auto result = pravaha::parse_pipeline("pipeline p { parallel { a, b } }");
     REQUIRE(result.has_value());
     REQUIRE(result.value().name == "p");
