@@ -331,3 +331,131 @@ TEST_CASE("Unit is monostate", "[pravaha][unit]") {
     pravaha::Unit u2{};
     REQUIRE(u1 == u2);
 }
+
+// ============================================================================
+// SECTION 11: Cancellation Primitives
+// ============================================================================
+
+TEST_CASE("CancellationToken - fresh token is not canceled", "[pravaha][cancellation]") {
+    pravaha::CancellationSource source;
+    auto tok = source.token();
+
+    REQUIRE(!tok.stop_requested());
+    REQUIRE(tok.has_state());
+}
+
+TEST_CASE("CancellationToken - default empty token is not canceled", "[pravaha][cancellation]") {
+    pravaha::CancellationToken empty_tok;
+
+    REQUIRE(!empty_tok.stop_requested());
+    REQUIRE(!empty_tok.has_state());
+}
+
+TEST_CASE("CancellationSource - request_stop changes state", "[pravaha][cancellation]") {
+    pravaha::CancellationSource source;
+    auto tok = source.token();
+
+    REQUIRE(!tok.stop_requested());
+    REQUIRE(!source.stop_requested());
+
+    source.request_stop();
+
+    REQUIRE(tok.stop_requested());
+    REQUIRE(source.stop_requested());
+}
+
+TEST_CASE("CancellationSource - repeated request_stop is safe", "[pravaha][cancellation]") {
+    pravaha::CancellationSource source;
+    auto tok = source.token();
+
+    source.request_stop();
+    source.request_stop();
+    source.request_stop();
+
+    REQUIRE(tok.stop_requested());
+    REQUIRE(source.stop_requested());
+}
+
+TEST_CASE("CancellationSource - multiple tokens observe same state", "[pravaha][cancellation]") {
+    pravaha::CancellationSource source;
+    auto tok1 = source.token();
+    auto tok2 = source.token();
+
+    REQUIRE(!tok1.stop_requested());
+    REQUIRE(!tok2.stop_requested());
+
+    source.request_stop();
+
+    REQUIRE(tok1.stop_requested());
+    REQUIRE(tok2.stop_requested());
+}
+
+TEST_CASE("CancellationScope - root scope not canceled initially", "[pravaha][cancellation]") {
+    pravaha::CancellationScope scope;
+
+    REQUIRE(!scope.stop_requested());
+}
+
+TEST_CASE("CancellationScope - local request_stop", "[pravaha][cancellation]") {
+    pravaha::CancellationScope scope;
+
+    scope.request_stop();
+
+    REQUIRE(scope.stop_requested());
+}
+
+TEST_CASE("CancellationScope - child scope observes parent cancellation", "[pravaha][cancellation]") {
+    pravaha::CancellationSource parent_source;
+    pravaha::CancellationScope child_scope{parent_source.token()};
+
+    // Initially neither is canceled
+    REQUIRE(!child_scope.stop_requested());
+
+    // Cancel the parent
+    parent_source.request_stop();
+
+    // Child observes parent cancellation
+    REQUIRE(child_scope.stop_requested());
+}
+
+TEST_CASE("CancellationScope - child local cancel does not affect parent", "[pravaha][cancellation]") {
+    pravaha::CancellationSource parent_source;
+    pravaha::CancellationScope child_scope{parent_source.token()};
+
+    // Cancel the child locally
+    child_scope.request_stop();
+
+    // Child is canceled
+    REQUIRE(child_scope.stop_requested());
+
+    // Parent is NOT canceled
+    REQUIRE(!parent_source.stop_requested());
+}
+
+TEST_CASE("CancellationScope - token from scope", "[pravaha][cancellation]") {
+    pravaha::CancellationScope scope;
+    auto tok = scope.token();
+
+    REQUIRE(!tok.stop_requested());
+
+    scope.request_stop();
+
+    REQUIRE(tok.stop_requested());
+}
+
+TEST_CASE("CancellationScope - nested scopes", "[pravaha][cancellation]") {
+    pravaha::CancellationSource root_source;
+    pravaha::CancellationScope mid_scope{root_source.token()};
+    pravaha::CancellationScope leaf_scope{mid_scope.token()};
+
+    REQUIRE(!leaf_scope.stop_requested());
+
+    // Cancel mid-level
+    mid_scope.request_stop();
+
+    // Leaf observes mid-level cancellation through its parent token
+    REQUIRE(leaf_scope.stop_requested());
+
+    // Root is unaffected
+    REQUIRE(!root_source.stop_requested());
+}

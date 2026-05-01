@@ -6,9 +6,11 @@
 // and execution orchestration. No macros. No virtual functions.
 // ============================================================================
 
+#include <atomic>
 #include <concepts>
 #include <cstddef>
 #include <expected>
+#include <memory>
 #include <source_location>
 #include <string>
 #include <string_view>
@@ -212,5 +214,121 @@ template <typename F, typename Result, typename... Args>
 concept InvocableTask =
     std::invocable<F, Args...> &&
     std::same_as<std::invoke_result_t<F, Args...>, Outcome<Result>>;
+
+// ============================================================================
+//  SECTION 4: CANCELLATION PRIMITIVES
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// 4.1 CancellationState — shared atomic boolean representing cancellation
+// ---------------------------------------------------------------------------
+// Internal state object shared between CancellationSource and CancellationToken.
+// Stores a single atomic_bool that transitions from false→true exactly once.
+struct CancellationState {
+    std::atomic<bool> requested{false};
+
+    // Request cancellation. Idempotent: multiple calls are safe.
+    void request() noexcept {
+        requested.store(true, std::memory_order_release);
+    }
+
+    // Check if cancellation has been requested.
+    [[nodiscard]] bool is_requested() const noexcept {
+        return requested.load(std::memory_order_acquire);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// 4.2 CancellationToken — lightweight non-owning handle to CancellationState
+// ---------------------------------------------------------------------------
+// Tokens are cheap to copy and pass to tasks. A default-constructed token
+// (empty token) always returns false for stop_requested().
+class CancellationToken {
+    std::shared_ptr<CancellationState> state_{};
+
+public:
+    // Default: empty token, never canceled
+    CancellationToken() noexcept = default;
+
+    // Construct from shared state
+    explicit CancellationToken(std::shared_ptr<CancellationState> state) noexcept
+        : state_{std::move(state)}
+    {}
+
+    // Check if stop has been requested. Empty token always returns false.
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return state_ && state_->is_requested();
+    }
+
+    // Check if this token is associated with a cancellation state
+    [[nodiscard]] bool has_state() const noexcept {
+        return state_ != nullptr;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// 4.3 CancellationSource — owns a CancellationState, produces tokens
+// ---------------------------------------------------------------------------
+// The source is the authority that can trigger cancellation. It owns the
+// shared state and hands out lightweight tokens to observers.
+class CancellationSource {
+    std::shared_ptr<CancellationState> state_;
+
+public:
+    // Construct with a fresh cancellation state
+    CancellationSource()
+        : state_{std::make_shared<CancellationState>()}
+    {}
+
+    // Obtain a token that observes this source's cancellation state
+    [[nodiscard]] CancellationToken token() const noexcept {
+        return CancellationToken{state_};
+    }
+
+    // Request cancellation. Idempotent: safe to call multiple times.
+    void request_stop() noexcept {
+        state_->request();
+    }
+
+    // Check if stop has been requested on this source
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return state_->is_requested();
+    }
+};
+
+// ---------------------------------------------------------------------------
+// 4.4 CancellationScope — scoped cancellation with optional parent
+// ---------------------------------------------------------------------------
+// A CancellationScope owns a local CancellationSource and optionally
+// observes a parent CancellationToken. Cancellation is requested if either
+// the local source or the parent has been canceled.
+class CancellationScope {
+    CancellationSource local_source_;
+    CancellationToken  parent_token_;
+
+public:
+    // Construct a root scope (no parent)
+    CancellationScope() = default;
+
+    // Construct a child scope that observes a parent token
+    explicit CancellationScope(CancellationToken parent) noexcept
+        : parent_token_{std::move(parent)}
+    {}
+
+    // Check if stop has been requested (local OR parent)
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return local_source_.stop_requested() || parent_token_.stop_requested();
+    }
+
+    // Get a token for this scope's local cancellation state
+    [[nodiscard]] CancellationToken token() const noexcept {
+        return local_source_.token();
+    }
+
+    // Request cancellation on the local source. Idempotent.
+    void request_stop() noexcept {
+        local_source_.request_stop();
+    }
+};
 
 } // namespace pravaha
