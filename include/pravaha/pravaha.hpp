@@ -298,12 +298,20 @@ inline constexpr TaskId invalid_task_id{};
 
 enum class EdgeKind { Sequence, Data, Cancellation, Join };
 
+struct PayloadMeta {
+    bool output_checked{false};
+    bool output_transferable{false};
+    bool output_serializable{false};
+    std::string output_type_name;
+};
+
 struct IrNode {
     TaskId id;
     std::string name;
     ExecutionDomain domain{ExecutionDomain::CPU};
     TaskState state{TaskState::Created};
     TaskCommand command;
+    PayloadMeta payload_meta;
     IrNode() = default;
     IrNode(TaskId id_, std::string name_, ExecutionDomain dom_, TaskCommand cmd_)
         : id{id_}, name{std::move(name_)}, domain{dom_}, state{TaskState::Created}, command{std::move(cmd_)} {}
@@ -373,11 +381,31 @@ template <typename F> LowerResult lower_impl(TaskExpr<F> expr);
 template <typename L, typename R> LowerResult lower_impl(SequenceExpr<L, R> expr);
 template <typename L, typename R> LowerResult lower_impl(ParallelExpr<L, R> expr);
 
+template <typename T>
+PayloadMeta make_payload_meta_for_type() {
+    PayloadMeta pm;
+    pm.output_checked = true;
+    pm.output_transferable = std::copy_constructible<T>;
+    if constexpr (std::is_trivially_copyable_v<T> && std::is_standard_layout_v<T>) {
+        if constexpr (meta::Reflectable<T>) {
+            pm.output_serializable = meta::is_zero_copy_serializable<T>();
+        } else {
+            pm.output_serializable = true;
+        }
+    } else {
+        pm.output_serializable = false;
+    }
+    pm.output_type_name = std::string(meta::type_name<T>());
+    return pm;
+}
+
 template <typename F>
 LowerResult lower_impl(TaskExpr<F> expr) {
     LowerResult result;
     auto cmd = TaskCommand::make(std::move(expr.callable()), expr.name());
     TaskId id = result.ir.add_node(expr.name(), expr.domain(), std::move(cmd));
+    using OutputT = std::conditional_t<std::is_void_v<std::invoke_result_t<F>>, Unit, std::invoke_result_t<F>>;
+    result.ir.nodes.back().payload_meta = make_payload_meta_for_type<OutputT>();
     result.starts.push_back(id);
     result.terminals.push_back(id);
     return result;
@@ -585,6 +613,86 @@ struct RuntimeState {
 };
 
 // ============================================================================
+//  SECTION 9.5: DOMAIN CONSTRAINT VALIDATION (uses meta.hpp)
+// ============================================================================
+
+namespace domain_traits {
+
+template <class T>
+consteval bool pravaha_zero_copy_serializable() {
+    if constexpr (!std::is_trivially_copyable_v<T> || !std::is_standard_layout_v<T>) return false;
+    else if constexpr (meta::Reflectable<T>) return meta::is_zero_copy_serializable<T>();
+    else return true;
+}
+
+template <class T>
+consteval bool pravaha_binary_stable() {
+    if constexpr (!std::is_trivially_copyable_v<T> || !std::is_standard_layout_v<T>) return false;
+    else if constexpr (meta::Reflectable<T>) return meta::is_binary_stable<T>();
+    else return std::is_standard_layout_v<T> && std::is_trivially_copyable_v<T>;
+}
+
+template <class T>
+consteval bool is_transferable() {
+    return std::copy_constructible<T>;
+}
+
+template <class T>
+consteval bool is_serializable_for_external() {
+    return pravaha_zero_copy_serializable<T>() || pravaha_binary_stable<T>();
+}
+
+} // namespace domain_traits
+
+namespace detail {
+
+template <typename F>
+struct infer_output_type {
+    using raw_result = std::invoke_result_t<F>;
+    using type = std::conditional_t<std::is_void_v<raw_result>, Unit, raw_result>;
+};
+
+template <typename F>
+using inferred_output_t = typename infer_output_type<F>::type;
+
+template <typename T>
+PayloadMeta make_payload_meta() {
+    PayloadMeta pm;
+    pm.output_checked = true;
+    pm.output_transferable = std::copy_constructible<T>;
+    if constexpr (std::is_trivially_copyable_v<T> && std::is_standard_layout_v<T>) {
+        if constexpr (meta::Reflectable<T>) {
+            pm.output_serializable = meta::is_zero_copy_serializable<T>();
+        } else {
+            pm.output_serializable = true;
+        }
+    } else {
+        pm.output_serializable = false;
+    }
+    pm.output_type_name = std::string(meta::type_name<T>());
+    return pm;
+}
+
+} // namespace detail
+
+inline Outcome<Unit> validate_domain_constraints(const TaskIr& ir) {
+    for (const auto& node : ir.nodes) {
+        if (node.domain == ExecutionDomain::External) {
+            if (node.payload_meta.output_checked) {
+                if (!node.payload_meta.output_transferable && !node.payload_meta.output_serializable) {
+                    return std::unexpected(PravahaError{
+                        ErrorKind::DomainConstraintViolation,
+                        "External domain requires transferable or serializable output: " + node.payload_meta.output_type_name,
+                        node.name
+                    });
+                }
+            }
+        }
+    }
+    return Unit{};
+}
+
+// ============================================================================
 //  SECTION 10: INLINE BACKEND & RUNNER
 // ============================================================================
 
@@ -729,6 +837,9 @@ public:
 
         auto validation = validate_ir_with_litegraph(ir);
         if (!validation.has_value()) return std::unexpected(validation.error());
+
+        auto domain_check = validate_domain_constraints(ir);
+        if (!domain_check.has_value()) return std::unexpected(domain_check.error());
 
         return execute(ir);
     }
