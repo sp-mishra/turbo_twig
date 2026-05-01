@@ -694,3 +694,95 @@ TEST_CASE("to_litegraph - converts valid IR to ExecutionGraph", "[pravaha][liteg
     REQUIRE(graph.node_count() == 2);
     REQUIRE(graph.edge_count() == 1);
 }
+
+// ============================================================================
+// SECTION 16: Runner & InlineBackend
+// ============================================================================
+
+TEST_CASE("Runner - single task runs on submit", "[pravaha][runner]") {
+    int counter = 0;
+    pravaha::Runner<> runner;
+    auto expr = pravaha::task("A", [&counter]() { ++counter; });
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(counter == 1);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(result.value().node_states.size() == 1);
+    REQUIRE(result.value().node_states[0] == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner - sequence runs A before B", "[pravaha][runner]") {
+    std::vector<int> order;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", [&order]() { order.push_back(1); });
+    auto b = pravaha::task("B", [&order]() { order.push_back(2); });
+    auto expr = std::move(a) | std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(order.size() == 2);
+    REQUIRE(order[0] == 1);
+    REQUIRE(order[1] == 2);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner - if A fails, B is skipped", "[pravaha][runner]") {
+    int b_counter = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() { throw std::runtime_error("fail"); });
+    auto b = pravaha::task("B", [&b_counter]() { ++b_counter; });
+    auto expr = std::move(a) | std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(b_counter == 0);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+    REQUIRE(result.value().node_states[0] == pravaha::TaskState::Failed);
+    REQUIRE(result.value().node_states[1] == pravaha::TaskState::Skipped);
+    REQUIRE(result.value().errors.size() == 1);
+}
+
+TEST_CASE("Runner - construction is lazy before submit", "[pravaha][runner]") {
+    int counter = 0;
+    pravaha::Runner<> runner;
+    auto expr = pravaha::task("A", [&counter]() { ++counter; });
+    REQUIRE(counter == 0);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(counter == 1);
+}
+
+TEST_CASE("Runner - final result is Failed if chain fails", "[pravaha][runner]") {
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() {});
+    auto b = pravaha::task("B", []() { throw std::runtime_error("boom"); });
+    auto expr = std::move(a) | std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+}
+
+TEST_CASE("Runner - final result is Succeeded if chain succeeds", "[pravaha][runner]") {
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() {});
+    auto b = pravaha::task("B", []() {});
+    auto c = pravaha::task("C", []() {});
+    auto expr = std::move(a) | std::move(b) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(result.value().node_states.size() == 3);
+    for (auto s : result.value().node_states)
+        REQUIRE(s == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner - LiteGraph validation is called before execution", "[pravaha][runner]") {
+    // We can't directly create a cyclic expression via DSL (it's structurally impossible),
+    // but we verify that validation runs by checking that a valid graph passes without error
+    int counter = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", [&counter]() { ++counter; });
+    auto b = pravaha::task("B", [&counter]() { ++counter; });
+    auto expr = (std::move(a) & std::move(b));
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(counter == 2);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}

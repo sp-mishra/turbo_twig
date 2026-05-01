@@ -415,6 +415,125 @@ struct GraphEdgePayload {
     bool operator==(const GraphEdgePayload& o) const noexcept { return kind == o.kind; }
 };
 
+// ============================================================================
+//  SECTION 9: INLINE BACKEND & RUNNER
+// ============================================================================
+
+struct RunResult {
+    TaskState final_state{TaskState::Succeeded};
+    std::vector<TaskState> node_states;
+    std::vector<PravahaError> errors;
+};
+
+class InlineBackend {
+    bool stop_requested_{false};
+public:
+    InlineBackend() = default;
+
+    Outcome<Unit> submit(TaskCommand& cmd) noexcept {
+        if (stop_requested_) {
+            return std::unexpected(PravahaError{ErrorKind::TaskCanceled, "Backend stop requested"});
+        }
+        return cmd.run();
+    }
+
+    void drain() noexcept {}
+    void request_stop() noexcept { stop_requested_ = true; }
+    [[nodiscard]] bool stopped() const noexcept { return stop_requested_; }
+};
+
+template <typename Backend = InlineBackend>
+class Runner {
+    Backend backend_;
+
+public:
+    Runner() = default;
+    explicit Runner(Backend b) : backend_{std::move(b)} {}
+
+    template <IsPravahaExpr Expr>
+    Outcome<RunResult> submit(Expr&& expr) {
+        auto ir_result = lower_to_ir(std::forward<Expr>(expr));
+        if (!ir_result.has_value()) {
+            return std::unexpected(ir_result.error());
+        }
+        auto& ir = ir_result.value();
+
+        auto validation = validate_ir_with_litegraph(ir);
+        if (!validation.has_value()) {
+            return std::unexpected(validation.error());
+        }
+
+        auto topo_result = topological_order(ir);
+        if (!topo_result.has_value()) {
+            return std::unexpected(topo_result.error());
+        }
+        auto& order = topo_result.value();
+
+        return execute(ir, order);
+    }
+
+    void request_stop() noexcept { backend_.request_stop(); }
+
+private:
+    Outcome<RunResult> execute(TaskIr& ir, const std::vector<TaskId>& order) {
+        RunResult run_result;
+        run_result.node_states.resize(ir.nodes.size(), TaskState::Ready);
+
+        for (const auto& task_id : order) {
+            auto idx = task_id.value;
+            if (idx >= ir.nodes.size()) continue;
+
+            if (run_result.node_states[idx] == TaskState::Skipped) continue;
+
+            if (backend_.stopped()) {
+                run_result.node_states[idx] = TaskState::Canceled;
+                run_result.final_state = TaskState::Canceled;
+                continue;
+            }
+
+            bool should_skip = false;
+            for (const auto& edge : ir.edges) {
+                if (edge.to == task_id &&
+                    (edge.kind == EdgeKind::Sequence || edge.kind == EdgeKind::Data)) {
+                    auto dep_idx = edge.from.value;
+                    if (dep_idx < run_result.node_states.size() &&
+                        run_result.node_states[dep_idx] != TaskState::Succeeded) {
+                        should_skip = true;
+                        break;
+                    }
+                }
+            }
+
+            if (should_skip) {
+                run_result.node_states[idx] = TaskState::Skipped;
+                continue;
+            }
+
+            run_result.node_states[idx] = TaskState::Running;
+            auto cmd_result = backend_.submit(ir.nodes[idx].command);
+
+            if (cmd_result.has_value()) {
+                run_result.node_states[idx] = TaskState::Succeeded;
+            } else {
+                run_result.node_states[idx] = TaskState::Failed;
+                run_result.errors.push_back(std::move(cmd_result.error()));
+                run_result.final_state = TaskState::Failed;
+            }
+        }
+
+        if (run_result.final_state == TaskState::Succeeded) {
+            for (auto s : run_result.node_states) {
+                if (s == TaskState::Canceled) {
+                    run_result.final_state = TaskState::Canceled;
+                    break;
+                }
+            }
+        }
+
+        return run_result;
+    }
+};
+
 } // namespace pravaha
 
 // std::hash specializations for LiteGraph Hashable concept
