@@ -1678,6 +1678,36 @@ TEST_CASE("parse_pipeline validates task identifiers via lithe frontend", "[prav
     }
 }
 
+TEST_CASE("parse_pipeline uses lithe frontend parallel intro", "[pravaha][parse][lithe]") {
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { parallel { a, b } }");
+        REQUIRE(result.has_value());
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
+        REQUIRE(result.has_value());
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { parallelx { a, b } }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { parallel_task { a, b } }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { parallel a, b }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+}
+
 TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
     REQUIRE(result.has_value());
