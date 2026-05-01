@@ -162,7 +162,7 @@ class TaskCommand {
     invoke_fn_t invoke_fn_{nullptr};
     move_fn_t move_fn_{nullptr};
     destroy_fn_t destroy_fn_{nullptr};
-    std::string_view debug_name_{};
+    std::string debug_name_{};
 
     template <typename F>
     static Outcome<Unit> invoke_impl(void* s) noexcept {
@@ -201,12 +201,12 @@ public:
     TaskCommand() noexcept = default;
     TaskCommand(const TaskCommand&) = delete;
     TaskCommand& operator=(const TaskCommand&) = delete;
-    TaskCommand(TaskCommand&& o) noexcept : invoke_fn_{o.invoke_fn_}, move_fn_{o.move_fn_}, destroy_fn_{o.destroy_fn_}, debug_name_{o.debug_name_} {
-        if (move_fn_) { move_fn_(storage_, o.storage_); o.invoke_fn_ = nullptr; o.move_fn_ = nullptr; o.destroy_fn_ = nullptr; o.debug_name_ = {}; }
+    TaskCommand(TaskCommand&& o) noexcept : invoke_fn_{o.invoke_fn_}, move_fn_{o.move_fn_}, destroy_fn_{o.destroy_fn_}, debug_name_{std::move(o.debug_name_)} {
+        if (move_fn_) { move_fn_(storage_, o.storage_); o.invoke_fn_ = nullptr; o.move_fn_ = nullptr; o.destroy_fn_ = nullptr; o.debug_name_.clear(); }
     }
     TaskCommand& operator=(TaskCommand&& o) noexcept {
-        if (this != &o) { destroy_current(); invoke_fn_ = o.invoke_fn_; move_fn_ = o.move_fn_; destroy_fn_ = o.destroy_fn_; debug_name_ = o.debug_name_;
-            if (move_fn_) { move_fn_(storage_, o.storage_); o.invoke_fn_ = nullptr; o.move_fn_ = nullptr; o.destroy_fn_ = nullptr; o.debug_name_ = {}; } }
+        if (this != &o) { destroy_current(); invoke_fn_ = o.invoke_fn_; move_fn_ = o.move_fn_; destroy_fn_ = o.destroy_fn_; debug_name_ = std::move(o.debug_name_);
+            if (move_fn_) { move_fn_(storage_, o.storage_); o.invoke_fn_ = nullptr; o.move_fn_ = nullptr; o.destroy_fn_ = nullptr; o.debug_name_.clear(); } }
         return *this;
     }
     ~TaskCommand() noexcept { destroy_current(); }
@@ -217,7 +217,7 @@ public:
         static_assert(sizeof(S) <= buffer_size, "TaskCommand: callable exceeds inline storage capacity (128 bytes).");
         static_assert(alignof(S) <= buffer_align, "TaskCommand: callable alignment exceeds buffer alignment.");
         TaskCommand cmd; ::new(cmd.storage_) S(std::forward<F>(f));
-        cmd.invoke_fn_ = &invoke_impl<S>; cmd.move_fn_ = &move_impl<S>; cmd.destroy_fn_ = &destroy_impl<S>; cmd.debug_name_ = debug_name;
+        cmd.invoke_fn_ = &invoke_impl<S>; cmd.move_fn_ = &move_impl<S>; cmd.destroy_fn_ = &destroy_impl<S>; cmd.debug_name_ = std::string{debug_name};
         return cmd;
     }
 
