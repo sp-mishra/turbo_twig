@@ -1,5 +1,6 @@
 #include "test/example_registry.hpp"
 #include "utils/log.hpp"
+#include "example_mlx.hpp"
 
 #include <array>
 #include <cstddef>
@@ -82,7 +83,14 @@ struct FailingExample {
 
 // ─── Registry & Main ────────────────────────────────────────────────────────
 
+// Register MLX example only when both the header provided the example type
+// and the build explicitly enabled MLX implementation/linking via HAS_MLX.
+// This avoids pulling in MLX symbols at link time when only headers are present.
+#if defined(EXAMPLE_MLX_AVAILABLE) && defined(HAS_MLX)
+using ExampleRegistry = testfw::Registry<StaticPass, StorageExample, FailingExample, MlxExample>;
+#else
 using ExampleRegistry = testfw::Registry<StaticPass, StorageExample, FailingExample>;
+#endif
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {

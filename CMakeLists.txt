@@ -103,7 +103,7 @@ else()
         message(STATUS "MLX: Disabled via BUILD_MLX=OFF")
     endif()
 endif()
-
+find_package(Threads REQUIRED)
 
 link_directories(/usr/local/lib)
 link_directories(${HOME_LIB_DIR})
