@@ -425,13 +425,14 @@ template <typename L, typename R> LowerResult lower_impl(SequenceExpr<L, R> expr
 template <typename L, typename R> LowerResult lower_impl(ParallelExpr<L, R> expr);
 
 template <typename T>
-PayloadMeta make_payload_meta_for_type() {
+PayloadMeta make_payload_meta() {
+    using LogicalT = unwrap_outcome_t<T>;
     PayloadMeta pm;
     pm.output_checked = true;
-    if constexpr (std::is_trivially_copyable_v<T> && std::is_standard_layout_v<T>) {
-        if constexpr (meta::Reflectable<T>) {
-            pm.output_transferable = meta::is_binary_stable<T>();
-            pm.output_serializable = meta::is_zero_copy_serializable<T>();
+    if constexpr (std::is_trivially_copyable_v<LogicalT> && std::is_standard_layout_v<LogicalT>) {
+        if constexpr (meta::Reflectable<LogicalT>) {
+            pm.output_transferable = meta::is_binary_stable<LogicalT>();
+            pm.output_serializable = meta::is_zero_copy_serializable<LogicalT>();
         } else {
             pm.output_transferable = true;
             pm.output_serializable = true;
@@ -440,7 +441,7 @@ PayloadMeta make_payload_meta_for_type() {
         pm.output_transferable = false;
         pm.output_serializable = false;
     }
-    pm.output_type_name = std::string(meta::type_name<T>());
+    pm.output_type_name = std::string(meta::type_name<LogicalT>());
     return pm;
 }
 
@@ -450,7 +451,7 @@ LowerResult lower_impl(TaskExpr<F> expr) {
     auto cmd = TaskCommand::make(std::move(expr.callable()), expr.name());
     TaskId id = result.ir.add_node(expr.name(), expr.domain(), std::move(cmd));
     using OutputT = callable_payload_t<F>;
-    result.ir.nodes.back().payload_meta = make_payload_meta_for_type<OutputT>();
+    result.ir.nodes.back().payload_meta = make_payload_meta<OutputT>();
     result.starts.push_back(id);
     result.terminals.push_back(id);
     return result;
@@ -847,25 +848,6 @@ struct infer_output_type {
 template <typename F>
 using inferred_output_t = typename infer_output_type<F>::type;
 
-template <typename T>
-PayloadMeta make_payload_meta() {
-    PayloadMeta pm;
-    pm.output_checked = true;
-    if constexpr (std::is_trivially_copyable_v<T> && std::is_standard_layout_v<T>) {
-        if constexpr (meta::Reflectable<T>) {
-            pm.output_transferable = meta::is_binary_stable<T>();
-            pm.output_serializable = meta::is_zero_copy_serializable<T>();
-        } else {
-            pm.output_transferable = true;
-            pm.output_serializable = true;
-        }
-    } else {
-        pm.output_transferable = false;
-        pm.output_serializable = false;
-    }
-    pm.output_type_name = std::string(meta::type_name<T>());
-    return pm;
-}
 
 } // namespace detail
 
