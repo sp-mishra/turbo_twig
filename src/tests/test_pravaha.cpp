@@ -1329,6 +1329,10 @@ TEST_CASE("Domain - External task returning Outcome<SimpleStruct> passes", "[pra
 TEST_CASE("lithe_bridge - keyword exact match", "[pravaha][parse][lithe]") {
     REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("pipeline", "pipeline"));
     REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("pipelineX", "pipeline"));
+    REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("then", "then"));
+    REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("thenx", "then"));
+    REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("parallel", "parallel"));
+    REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("parallel_task", "parallel"));
     REQUIRE(pravaha::symbolic::lithe_bridge::is_pipeline_keyword("pipeline"));
     REQUIRE(pravaha::symbolic::lithe_bridge::is_then_keyword("then"));
     REQUIRE(pravaha::symbolic::lithe_bridge::is_parallel_keyword("parallel"));
