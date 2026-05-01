@@ -1708,7 +1708,16 @@ inline Outcome<std::size_t> parse_parallel_intro(std::string_view text, std::siz
 
 } // namespace lithe_bridge
 
-struct SymbolicTaskExpr { std::string name; };
+struct LitheFrontendMeta {
+    std::string dump;
+    std::size_t hash{};
+};
+struct SymbolicTaskExpr {
+    std::string name;
+    LitheFrontendMeta frontend;
+    std::size_t source_begin{};
+    std::size_t source_end{};
+};
 struct SymbolicSequenceExpr;
 struct SymbolicParallelExpr;
 
@@ -1724,6 +1733,7 @@ struct SymbolicParallelExpr { std::vector<SymbolicExpr> branches; };
 struct SymbolicPipeline {
     std::string name;
     SymbolicExpr root;
+    LitheFrontendMeta frontend;
 };
 
 // Lithe-validated keyword set
@@ -1784,8 +1794,16 @@ struct Parser {
                 tok = peek_token();
             }
             if (!is_valid_identifier(tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Invalid identifier in parallel: " + std::string(tok)});
-            consume_token();
-            branches.push_back(SymbolicTaskExpr{std::string(tok)});
+            auto consumed = consume_token();
+            const std::size_t end = pos;
+            const std::size_t begin = end - consumed.size();
+            auto task_expr = lithe_frontend::task_ref_expr(std::string(consumed), begin, end);
+            branches.push_back(SymbolicTaskExpr{
+                std::string(consumed),
+                LitheFrontendMeta{lithe::emit::dump(task_expr), lithe::emit::structural_hash(task_expr)},
+                begin,
+                end
+            });
         }
         if (branches.empty()) return std::unexpected(PravahaError{ErrorKind::ParseError, "Empty parallel block"});
         auto par = std::make_unique<SymbolicParallelExpr>();
@@ -1803,8 +1821,16 @@ struct Parser {
             return parse_parallel();
         }
         if (!is_valid_identifier(tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected identifier, got: " + std::string(tok)});
-        consume_token();
-        return SymbolicExpr{SymbolicTaskExpr{std::string(tok)}};
+        auto consumed = consume_token();
+        const std::size_t end = pos;
+        const std::size_t begin = end - consumed.size();
+        auto task_expr = lithe_frontend::task_ref_expr(std::string(consumed), begin, end);
+        return SymbolicExpr{SymbolicTaskExpr{
+            std::string(consumed),
+            LitheFrontendMeta{lithe::emit::dump(task_expr), lithe::emit::structural_hash(task_expr)},
+            begin,
+            end
+        }};
     }
 
     Outcome<SymbolicExpr> parse_sequence() {
@@ -1827,14 +1853,18 @@ struct Parser {
     }
 
     Outcome<SymbolicPipeline> parse_pipeline() {
-        auto header = lithe_bridge::parse_pipeline_header(src);
+        auto header = lithe_frontend::parse_pipeline_header(src);
         if (!header.has_value()) return std::unexpected(header.error());
         pos = header->body_start_offset;
 
         auto body = parse_sequence();
         if (!body.has_value()) return std::unexpected(body.error());
         if (!expect("}")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '}'"});
-        return SymbolicPipeline{std::move(header->pipeline_name), std::move(body.value())};
+        return SymbolicPipeline{
+            std::move(header->name),
+            std::move(body.value()),
+            LitheFrontendMeta{std::move(header->lithe_dump), header->lithe_hash}
+        };
     }
 };
 

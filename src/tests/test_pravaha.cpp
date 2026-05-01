@@ -1596,6 +1596,19 @@ TEST_CASE("parse_pipeline - simple sequence", "[pravaha][parse]") {
     REQUIRE(result.value().name == "p");
 }
 
+TEST_CASE("parse_pipeline stores lithe frontend metadata", "[pravaha][parse][lithe]") {
+    auto result = pravaha::parse_pipeline("pipeline p { a }");
+    REQUIRE(result.has_value());
+    REQUIRE(result->frontend.hash != 0);
+    REQUIRE_FALSE(result->frontend.dump.empty());
+
+    auto* task = std::get_if<pravaha::symbolic::SymbolicTaskExpr>(&result->root);
+    REQUIRE(task != nullptr);
+    REQUIRE(task->name == "a");
+    REQUIRE(task->frontend.hash != 0);
+    REQUIRE_FALSE(task->frontend.dump.empty());
+}
+
 TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
     REQUIRE(result.has_value());
