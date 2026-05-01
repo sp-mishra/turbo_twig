@@ -1528,67 +1528,6 @@ TEST_CASE("pravaha lithe frontend parses parallel intro", "[pravaha][parse][lith
     }
 }
 
-TEST_CASE("lithe_bridge - keyword exact match", "[pravaha][parse][lithe]") {
-    REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("pipeline", "pipeline"));
-    REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("pipelineX", "pipeline"));
-    REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("then", "then"));
-    REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("thenx", "then"));
-    REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("parallel", "parallel"));
-    REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("parallel_task", "parallel"));
-    REQUIRE(pravaha::symbolic::lithe_bridge::is_pipeline_keyword("pipeline"));
-    REQUIRE(pravaha::symbolic::lithe_bridge::is_then_keyword("then"));
-    REQUIRE(pravaha::symbolic::lithe_bridge::is_parallel_keyword("parallel"));
-}
-
-TEST_CASE("lithe_bridge - reserved keyword cannot be identifier", "[pravaha][parse][lithe]") {
-    REQUIRE(pravaha::symbolic::lithe_bridge::is_reserved_keyword("pipeline"));
-    REQUIRE(pravaha::symbolic::lithe_bridge::is_reserved_keyword("then"));
-    REQUIRE(pravaha::symbolic::lithe_bridge::is_reserved_keyword("parallel"));
-    REQUIRE(!pravaha::symbolic::lithe_bridge::identifier_matches("then"));
-}
-
-TEST_CASE("lithe_bridge - parse_pipeline_header success", "[pravaha][parse][lithe]") {
-    constexpr std::string_view src = "pipeline p { a then b }";
-    auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header(src);
-    REQUIRE(header.has_value());
-    REQUIRE(header->pipeline_name == "p");
-    REQUIRE(header->open_brace_offset == src.find('{'));
-    REQUIRE(header->body_start_offset == src.find('{') + 1);
-}
-
-TEST_CASE("lithe_bridge - parse_pipeline_header rejects bad keyword", "[pravaha][parse][lithe]") {
-    auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header("pipelinex p { a }");
-    REQUIRE(!header.has_value());
-    REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
-    REQUIRE(header.error().message.find("pipeline") != std::string::npos);
-}
-
-TEST_CASE("lithe_bridge - parse_pipeline_header rejects reserved name", "[pravaha][parse][lithe]") {
-    auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header("pipeline then { a }");
-    REQUIRE(!header.has_value());
-    REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
-    REQUIRE(header.error().message.find("reserved") != std::string::npos);
-}
-
-TEST_CASE("lithe_bridge - parse_pipeline_header rejects missing brace", "[pravaha][parse][lithe]") {
-    auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header("pipeline p a }");
-    REQUIRE(!header.has_value());
-    REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
-    REQUIRE(header.error().message.find("{") != std::string::npos);
-}
-
-TEST_CASE("lithe_bridge - parse_parallel_intro success", "[pravaha][parse][lithe]") {
-    constexpr std::string_view src = "parallel { a, b }";
-    auto result = pravaha::symbolic::lithe_bridge::parse_parallel_intro(src, 0);
-    REQUIRE(result.has_value());
-    REQUIRE(result.value() == src.find('{') + 1);
-}
-
-TEST_CASE("lithe_bridge - parse_parallel_intro rejects bad keyword", "[pravaha][parse][lithe]") {
-    auto result = pravaha::symbolic::lithe_bridge::parse_parallel_intro("parallelx { a, b }", 0);
-    REQUIRE(!result.has_value());
-    REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
-}
 
 TEST_CASE("parse_pipeline - simple sequence", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then b then c }");

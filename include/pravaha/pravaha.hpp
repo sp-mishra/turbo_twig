@@ -1332,6 +1332,50 @@ struct hash<pravaha::symbolic::lithe_frontend::TokenCapture> {
 
 } // namespace std
 
+namespace lithe::emit {
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::pipeline_tag> {
+    static constexpr const char* value = "pravaha.pipeline";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::task_ref_tag> {
+    static constexpr const char* value = "pravaha.task_ref";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::sequence_tag> {
+    static constexpr const char* value = "pravaha.sequence";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::parallel_tag> {
+    static constexpr const char* value = "pravaha.parallel";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::collect_all_tag> {
+    static constexpr const char* value = "pravaha.collect_all";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::keyword_tag> {
+    static constexpr const char* value = "pravaha.keyword";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::identifier_tag> {
+    static constexpr const char* value = "pravaha.identifier";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::token_tag> {
+    static constexpr const char* value = "pravaha.token";
+};
+
+} // namespace lithe::emit
+
 namespace pravaha {
 
 namespace symbolic {
@@ -1580,134 +1624,6 @@ inline Outcome<ParallelIntroParse> parse_parallel_intro(std::string_view text, s
 
 } // namespace lithe_frontend
 
-namespace lithe_bridge {
-
-// v0.1: Lithe owns keyword/token exact matching; identifier character
-// classes remain local fallback until a dedicated character-class grammar is added.
-inline bool keyword_matches(std::string_view token, std::string_view keyword) {
-    auto pm = lithe::patterns::match(keyword, token);
-    return pm.apply([](auto&& p, auto&& v) {
-        return std::string_view{p} == std::string_view{v};
-    });
-}
-
-inline bool is_pipeline_keyword(std::string_view token) {
-    return keyword_matches(token, "pipeline");
-}
-
-inline bool is_then_keyword(std::string_view token) {
-    return keyword_matches(token, "then");
-}
-
-inline bool is_parallel_keyword(std::string_view token) {
-    return keyword_matches(token, "parallel");
-}
-
-inline bool is_reserved_keyword(std::string_view token) {
-    return is_pipeline_keyword(token)
-        || is_then_keyword(token)
-        || is_parallel_keyword(token)
-        || keyword_matches(token, "collect_all");
-}
-
-inline bool identifier_matches(std::string_view token) {
-    if (token.empty() || is_reserved_keyword(token)) return false;
-    if (!std::isalpha(static_cast<unsigned char>(token[0])) && token[0] != '_') return false;
-    for (auto c : token) {
-        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') return false;
-    }
-    return true;
-}
-
-struct PipelineHeaderParse {
-    std::string pipeline_name;
-    std::size_t body_start_offset{0};
-    std::size_t open_brace_offset{0};
-};
-
-inline Outcome<PipelineHeaderParse> parse_pipeline_header(std::string_view text) {
-    std::size_t pos = 0;
-    auto skip_ws = [&]() {
-        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
-            ++pos;
-        }
-    };
-
-    auto read_token = [&]() -> std::string_view {
-        skip_ws();
-        if (pos >= text.size()) return {};
-        std::size_t start = pos;
-        while (pos < text.size() && !std::isspace(static_cast<unsigned char>(text[pos]))
-               && text[pos] != '{' && text[pos] != '}' && text[pos] != ',') {
-            ++pos;
-        }
-        return text.substr(start, pos - start);
-    };
-
-    auto kw = read_token();
-    if (!is_pipeline_keyword(kw)) {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'pipeline'"});
-    }
-
-    auto name_tok = read_token();
-    if (name_tok.empty()) {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected identifier after pipeline"});
-    }
-    if (is_reserved_keyword(name_tok)) {
-        return std::unexpected(PravahaError{
-            ErrorKind::ParseError,
-            "reserved keyword cannot be used as task identifier: " + std::string(name_tok)
-        });
-    }
-    if (!identifier_matches(name_tok)) {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected identifier after pipeline"});
-    }
-
-    skip_ws();
-    if (pos >= text.size() || text[pos] != '{') {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after pipeline name"});
-    }
-
-    const std::size_t brace = pos;
-    ++pos;
-    return PipelineHeaderParse{std::string(name_tok), pos, brace};
-}
-
-inline Outcome<std::size_t> parse_parallel_intro(std::string_view text, std::size_t offset) {
-    std::size_t pos = offset;
-    auto skip_ws = [&]() {
-        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
-            ++pos;
-        }
-    };
-
-    auto read_token = [&]() -> std::string_view {
-        skip_ws();
-        if (pos >= text.size()) return {};
-        std::size_t start = pos;
-        while (pos < text.size() && !std::isspace(static_cast<unsigned char>(text[pos]))
-               && text[pos] != '{' && text[pos] != '}' && text[pos] != ',') {
-            ++pos;
-        }
-        return text.substr(start, pos - start);
-    };
-
-    auto kw = read_token();
-    if (!is_parallel_keyword(kw)) {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'parallel'"});
-    }
-
-    skip_ws();
-    if (pos >= text.size() || text[pos] != '{') {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after parallel"});
-    }
-
-    ++pos;
-    return pos;
-}
-
-} // namespace lithe_bridge
-
 struct LitheFrontendMeta {
     std::string dump;
     std::size_t hash{};
@@ -1797,11 +1713,11 @@ inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr
 
 // Lithe-validated keyword set
 inline bool is_keyword(std::string_view token) {
-    return lithe_bridge::is_reserved_keyword(token);
+    return lithe_frontend::is_reserved_keyword(token);
 }
 
 inline bool is_valid_identifier(std::string_view token) {
-    return lithe_bridge::identifier_matches(token);
+    return lithe_frontend::identifier_matches(token);
 }
 
 inline Outcome<Unit> validate_task_identifier(std::string_view token) {
@@ -1940,7 +1856,7 @@ struct Parser {
         while (true) {
             skip_ws();
             auto tok = peek_token();
-            if (!lithe_bridge::is_then_keyword(tok)) break;
+            if (!lithe_frontend::is_then_keyword(tok)) break;
             consume_token();
             auto next = parse_step();
             if (!next.has_value()) return next;
@@ -2299,46 +2215,3 @@ auto parallel_reduce(
 } // namespace pravaha
 
 
-namespace lithe::emit {
-
-template<>
-struct tag_name<pravaha::symbolic::lithe_frontend::pipeline_tag> {
-    static constexpr const char* value = "pravaha.pipeline";
-};
-
-template<>
-struct tag_name<pravaha::symbolic::lithe_frontend::task_ref_tag> {
-    static constexpr const char* value = "pravaha.task_ref";
-};
-
-template<>
-struct tag_name<pravaha::symbolic::lithe_frontend::sequence_tag> {
-    static constexpr const char* value = "pravaha.sequence";
-};
-
-template<>
-struct tag_name<pravaha::symbolic::lithe_frontend::parallel_tag> {
-    static constexpr const char* value = "pravaha.parallel";
-};
-
-template<>
-struct tag_name<pravaha::symbolic::lithe_frontend::collect_all_tag> {
-    static constexpr const char* value = "pravaha.collect_all";
-};
-
-template<>
-struct tag_name<pravaha::symbolic::lithe_frontend::keyword_tag> {
-    static constexpr const char* value = "pravaha.keyword";
-};
-
-template<>
-struct tag_name<pravaha::symbolic::lithe_frontend::identifier_tag> {
-    static constexpr const char* value = "pravaha.identifier";
-};
-
-template<>
-struct tag_name<pravaha::symbolic::lithe_frontend::token_tag> {
-    static constexpr const char* value = "pravaha.token";
-};
-
-} // namespace lithe::emit
