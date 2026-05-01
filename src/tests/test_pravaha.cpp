@@ -609,6 +609,14 @@ TEST_CASE("lower_to_ir - commands are runnable after lowering", "[pravaha][ir]")
     REQUIRE(counter == 1);
 }
 
+TEST_CASE("lower_to_ir - Outcome<Unit> payload metadata unwraps to Unit", "[pravaha][ir][payload]") {
+    auto a = pravaha::task("a", []() -> pravaha::Outcome<pravaha::Unit> { return pravaha::Unit{}; });
+    auto result = pravaha::lower_to_ir(std::move(a));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 1);
+    REQUIRE(result->nodes[0].payload_meta.output_type_name == std::string(meta::type_name<pravaha::Unit>()));
+}
+
 // ============================================================================
 // SECTION 15: LiteGraph Validation Layer
 // ============================================================================
@@ -1243,6 +1251,33 @@ TEST_CASE("Domain - error kind is DomainConstraintViolation", "[pravaha][domain]
     REQUIRE(!result.has_value());
     REQUIRE(result.error().kind == pravaha::ErrorKind::DomainConstraintViolation);
     REQUIRE(result.error().task_identity == "bad_payload");
+}
+
+TEST_CASE("Domain - CPU task returning Outcome<std::string> passes", "[pravaha][domain]") {
+    pravaha::Runner<> runner;
+    auto t = pravaha::task_on(pravaha::ExecutionDomain::CPU, "cpu_outcome_string",
+        []() -> pravaha::Outcome<std::string> { return std::string{"ok"}; });
+    auto result = runner.submit(std::move(t));
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Domain - External task returning Outcome<std::string> fails", "[pravaha][domain]") {
+    pravaha::Runner<> runner;
+    auto t = pravaha::task_on(pravaha::ExecutionDomain::External, "ext_outcome_string",
+        []() -> pravaha::Outcome<std::string> { return std::string{"bad"}; });
+    auto result = runner.submit(std::move(t));
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::DomainConstraintViolation);
+}
+
+TEST_CASE("Domain - External task returning Outcome<SimpleStruct> passes", "[pravaha][domain]") {
+    pravaha::Runner<> runner;
+    auto t = pravaha::task_on(pravaha::ExecutionDomain::External, "ext_outcome_struct",
+        []() -> pravaha::Outcome<SimpleStruct> { return SimpleStruct{1, 2.0}; });
+    auto result = runner.submit(std::move(t));
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
 }
 
 // ============================================================================

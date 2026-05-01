@@ -374,6 +374,26 @@ struct TaskIr {
 
 namespace detail {
 
+template <class T>
+struct unwrap_outcome {
+    using type = T;
+};
+
+template <class T>
+struct unwrap_outcome<Outcome<T>> {
+    using type = T;
+};
+
+template <class T>
+using unwrap_outcome_t = typename unwrap_outcome<std::remove_cvref_t<T>>::type;
+
+template <class F>
+using callable_payload_t = std::conditional_t<
+    std::is_void_v<std::invoke_result_t<F>>,
+    Unit,
+    unwrap_outcome_t<std::invoke_result_t<F>>
+>;
+
 struct LowerResult {
     std::vector<TaskId> starts;
     std::vector<TaskId> terminals;
@@ -424,7 +444,7 @@ LowerResult lower_impl(TaskExpr<F> expr) {
     LowerResult result;
     auto cmd = TaskCommand::make(std::move(expr.callable()), expr.name());
     TaskId id = result.ir.add_node(expr.name(), expr.domain(), std::move(cmd));
-    using OutputT = std::conditional_t<std::is_void_v<std::invoke_result_t<F>>, Unit, std::invoke_result_t<F>>;
+    using OutputT = callable_payload_t<F>;
     result.ir.nodes.back().payload_meta = make_payload_meta_for_type<OutputT>();
     result.starts.push_back(id);
     result.terminals.push_back(id);
@@ -816,8 +836,7 @@ namespace detail {
 
 template <typename F>
 struct infer_output_type {
-    using raw_result = std::invoke_result_t<F>;
-    using type = std::conditional_t<std::is_void_v<raw_result>, Unit, raw_result>;
+    using type = callable_payload_t<F>;
 };
 
 template <typename F>
