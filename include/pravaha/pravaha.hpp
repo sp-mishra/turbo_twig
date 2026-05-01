@@ -273,12 +273,6 @@ template <IsPravahaExpr L, IsPravahaExpr R>
 template <typename L, typename R>
 [[nodiscard]] auto collect_all(ParallelExpr<L, R> expr) { expr.policy = JoinPolicyKind::CollectAll; return expr; }
 
-template <IsPravahaExpr E>
-    requires (!requires { typename std::remove_cvref_t<E>::left; typename std::remove_cvref_t<E>::right; } ||
-              !std::same_as<std::remove_cvref_t<E>,
-                            ParallelExpr<typename std::remove_cvref_t<E>::left,
-                                         typename std::remove_cvref_t<E>::right>>)
-[[nodiscard]] auto collect_all(E&& expr) { return std::forward<E>(expr); }
 
 // ============================================================================
 //  SECTION 7: TASK IR
