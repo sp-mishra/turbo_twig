@@ -774,8 +774,6 @@ TEST_CASE("Runner - final result is Succeeded if chain succeeds", "[pravaha][run
 }
 
 TEST_CASE("Runner - LiteGraph validation is called before execution", "[pravaha][runner]") {
-    // We can't directly create a cyclic expression via DSL (it's structurally impossible),
-    // but we verify that validation runs by checking that a valid graph passes without error
     int counter = 0;
     pravaha::Runner<> runner;
     auto a = pravaha::task("A", [&counter]() { ++counter; });
@@ -785,4 +783,121 @@ TEST_CASE("Runner - LiteGraph validation is called before execution", "[pravaha]
     REQUIRE(result.has_value());
     REQUIRE(counter == 2);
     REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}
+
+// ============================================================================
+// SECTION 17: Parallel Semantics & Dependency Counters
+// ============================================================================
+
+TEST_CASE("Runner parallel - A & B both run", "[pravaha][runner][parallel]") {
+    int a_ran = 0, b_ran = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", [&a_ran]() { ++a_ran; });
+    auto b = pravaha::task("B", [&b_ran]() { ++b_ran; });
+    auto expr = std::move(a) & std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(a_ran == 1);
+    REQUIRE(b_ran == 1);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(result.value().node_states.size() == 2);
+    REQUIRE(result.value().node_states[0] == pravaha::TaskState::Succeeded);
+    REQUIRE(result.value().node_states[1] == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner parallel - (A & B) | C runs C after both", "[pravaha][runner][parallel]") {
+    std::vector<std::string> order;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", [&order]() { order.push_back("A"); });
+    auto b = pravaha::task("B", [&order]() { order.push_back("B"); });
+    auto c = pravaha::task("C", [&order]() { order.push_back("C"); });
+    auto expr = (std::move(a) & std::move(b)) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(order.size() == 3);
+    // C must be last
+    REQUIRE(order[2] == "C");
+    // A and B must both appear before C
+    bool a_before_c = false, b_before_c = false;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        if (order[i] == "A") a_before_c = true;
+        if (order[i] == "B") b_before_c = true;
+        if (order[i] == "C") break;
+    }
+    REQUIRE(a_before_c);
+    REQUIRE(b_before_c);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner parallel - if A fails in (A & B) | C, C is skipped", "[pravaha][runner][parallel]") {
+    int b_ran = 0, c_ran = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() { throw std::runtime_error("A failed"); });
+    auto b = pravaha::task("B", [&b_ran]() { ++b_ran; });
+    auto c = pravaha::task("C", [&c_ran]() { ++c_ran; });
+    auto expr = (std::move(a) & std::move(b)) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    // B should still run (independent of A)
+    REQUIRE(b_ran == 1);
+    // C depends on both A and B; A failed so C is skipped
+    REQUIRE(c_ran == 0);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+    // Node states: A=Failed, B=Succeeded, C=Skipped
+    REQUIRE(result.value().node_states[0] == pravaha::TaskState::Failed);
+    REQUIRE(result.value().node_states[1] == pravaha::TaskState::Succeeded);
+    REQUIRE(result.value().node_states[2] == pravaha::TaskState::Skipped);
+}
+
+TEST_CASE("Runner parallel - A & (B | C) preserves only B before C", "[pravaha][runner][parallel]") {
+    std::vector<std::string> order;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", [&order]() { order.push_back("A"); });
+    auto b = pravaha::task("B", [&order]() { order.push_back("B"); });
+    auto c = pravaha::task("C", [&order]() { order.push_back("C"); });
+    auto expr = std::move(a) & (std::move(b) | std::move(c));
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(order.size() == 3);
+    // B must appear before C
+    std::size_t b_pos = ~std::size_t{0}, c_pos = ~std::size_t{0};
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        if (order[i] == "B") b_pos = i;
+        if (order[i] == "C") c_pos = i;
+    }
+    REQUIRE(b_pos < c_pos);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner parallel - all nodes reach exactly one terminal state", "[pravaha][runner][parallel]") {
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() {});
+    auto b = pravaha::task("B", []() { throw std::runtime_error("fail"); });
+    auto c = pravaha::task("C", []() {});
+    auto d = pravaha::task("D", []() {});
+    // (A & B) | (C & D): C and D depend on both A and B
+    auto expr = (std::move(a) & std::move(b)) | (std::move(c) & std::move(d));
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    for (auto s : result.value().node_states) {
+        // Each node must be in exactly one terminal state
+        REQUIRE((s == pravaha::TaskState::Succeeded ||
+                 s == pravaha::TaskState::Failed ||
+                 s == pravaha::TaskState::Skipped ||
+                 s == pravaha::TaskState::Canceled));
+    }
+}
+
+TEST_CASE("Runner parallel - no task runs twice", "[pravaha][runner][parallel]") {
+    std::vector<int> run_counts(3, 0);
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", [&run_counts]() { ++run_counts[0]; });
+    auto b = pravaha::task("B", [&run_counts]() { ++run_counts[1]; });
+    auto c = pravaha::task("C", [&run_counts]() { ++run_counts[2]; });
+    auto expr = (std::move(a) & std::move(b)) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(run_counts[0] == 1);
+    REQUIRE(run_counts[1] == 1);
+    REQUIRE(run_counts[2] == 1);
 }

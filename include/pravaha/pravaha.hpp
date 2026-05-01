@@ -416,7 +416,7 @@ struct GraphEdgePayload {
 };
 
 // ============================================================================
-//  SECTION 9: INLINE BACKEND & RUNNER
+//  SECTION 9: RUNTIME STATE & SCHEDULER
 // ============================================================================
 
 struct RunResult {
@@ -424,6 +424,95 @@ struct RunResult {
     std::vector<TaskState> node_states;
     std::vector<PravahaError> errors;
 };
+
+struct RuntimeState {
+    std::vector<TaskState> node_states;
+    std::vector<std::size_t> remaining_deps;
+    std::vector<std::vector<std::size_t>> successors; // outgoing dep adjacency
+    std::vector<PravahaError> errors;
+    bool canceled{false};
+
+    static RuntimeState build(const TaskIr& ir) {
+        RuntimeState rs;
+        std::size_t n = ir.nodes.size();
+        rs.node_states.resize(n, TaskState::Created);
+        rs.remaining_deps.resize(n, 0);
+        rs.successors.resize(n);
+
+        for (const auto& edge : ir.edges) {
+            if (edge.kind != EdgeKind::Sequence && edge.kind != EdgeKind::Data) continue;
+            auto from = edge.from.value;
+            auto to = edge.to.value;
+            if (from < n && to < n) {
+                rs.remaining_deps[to]++;
+                rs.successors[from].push_back(to);
+            }
+        }
+
+        for (std::size_t i = 0; i < n; ++i) {
+            if (rs.remaining_deps[i] == 0) {
+                rs.node_states[i] = TaskState::Ready;
+            }
+        }
+
+        return rs;
+    }
+
+    void mark_succeeded(std::size_t idx) {
+        node_states[idx] = TaskState::Succeeded;
+        for (auto succ : successors[idx]) {
+            if (remaining_deps[succ] > 0) {
+                remaining_deps[succ]--;
+                if (remaining_deps[succ] == 0 && node_states[succ] == TaskState::Created) {
+                    node_states[succ] = TaskState::Ready;
+                }
+            }
+        }
+    }
+
+    void mark_failed(std::size_t idx, PravahaError err) {
+        node_states[idx] = TaskState::Failed;
+        errors.push_back(std::move(err));
+        skip_downstream(idx);
+    }
+
+    void skip_downstream(std::size_t idx) {
+        for (auto succ : successors[idx]) {
+            if (node_states[succ] == TaskState::Created || node_states[succ] == TaskState::Ready) {
+                node_states[succ] = TaskState::Skipped;
+                skip_downstream(succ);
+            }
+        }
+    }
+
+    [[nodiscard]] bool has_ready() const {
+        for (auto s : node_states)
+            if (s == TaskState::Ready) return true;
+        return false;
+    }
+
+    [[nodiscard]] std::size_t next_ready() const {
+        for (std::size_t i = 0; i < node_states.size(); ++i)
+            if (node_states[i] == TaskState::Ready) return i;
+        return ~std::size_t{0};
+    }
+
+    RunResult finalize() const {
+        RunResult result;
+        result.node_states = node_states;
+        result.errors = errors;
+        result.final_state = TaskState::Succeeded;
+        for (auto s : node_states) {
+            if (s == TaskState::Failed) { result.final_state = TaskState::Failed; break; }
+            if (s == TaskState::Canceled) { result.final_state = TaskState::Canceled; break; }
+        }
+        return result;
+    }
+};
+
+// ============================================================================
+//  SECTION 10: INLINE BACKEND & RUNNER
+// ============================================================================
 
 class InlineBackend {
     bool stop_requested_{false};
@@ -453,84 +542,44 @@ public:
     template <IsPravahaExpr Expr>
     Outcome<RunResult> submit(Expr&& expr) {
         auto ir_result = lower_to_ir(std::forward<Expr>(expr));
-        if (!ir_result.has_value()) {
-            return std::unexpected(ir_result.error());
-        }
+        if (!ir_result.has_value()) return std::unexpected(ir_result.error());
         auto& ir = ir_result.value();
 
         auto validation = validate_ir_with_litegraph(ir);
-        if (!validation.has_value()) {
-            return std::unexpected(validation.error());
-        }
+        if (!validation.has_value()) return std::unexpected(validation.error());
 
-        auto topo_result = topological_order(ir);
-        if (!topo_result.has_value()) {
-            return std::unexpected(topo_result.error());
-        }
-        auto& order = topo_result.value();
-
-        return execute(ir, order);
+        return execute(ir);
     }
 
     void request_stop() noexcept { backend_.request_stop(); }
 
 private:
-    Outcome<RunResult> execute(TaskIr& ir, const std::vector<TaskId>& order) {
-        RunResult run_result;
-        run_result.node_states.resize(ir.nodes.size(), TaskState::Ready);
+    Outcome<RunResult> execute(TaskIr& ir) {
+        auto state = RuntimeState::build(ir);
 
-        for (const auto& task_id : order) {
-            auto idx = task_id.value;
-            if (idx >= ir.nodes.size()) continue;
-
-            if (run_result.node_states[idx] == TaskState::Skipped) continue;
+        while (state.has_ready()) {
+            auto idx = state.next_ready();
+            if (idx >= ir.nodes.size()) break;
 
             if (backend_.stopped()) {
-                run_result.node_states[idx] = TaskState::Canceled;
-                run_result.final_state = TaskState::Canceled;
+                state.node_states[idx] = TaskState::Canceled;
+                state.canceled = true;
                 continue;
             }
 
-            bool should_skip = false;
-            for (const auto& edge : ir.edges) {
-                if (edge.to == task_id &&
-                    (edge.kind == EdgeKind::Sequence || edge.kind == EdgeKind::Data)) {
-                    auto dep_idx = edge.from.value;
-                    if (dep_idx < run_result.node_states.size() &&
-                        run_result.node_states[dep_idx] != TaskState::Succeeded) {
-                        should_skip = true;
-                        break;
-                    }
-                }
-            }
+            state.node_states[idx] = TaskState::Scheduled;
+            state.node_states[idx] = TaskState::Running;
 
-            if (should_skip) {
-                run_result.node_states[idx] = TaskState::Skipped;
-                continue;
-            }
-
-            run_result.node_states[idx] = TaskState::Running;
             auto cmd_result = backend_.submit(ir.nodes[idx].command);
 
             if (cmd_result.has_value()) {
-                run_result.node_states[idx] = TaskState::Succeeded;
+                state.mark_succeeded(idx);
             } else {
-                run_result.node_states[idx] = TaskState::Failed;
-                run_result.errors.push_back(std::move(cmd_result.error()));
-                run_result.final_state = TaskState::Failed;
+                state.mark_failed(idx, std::move(cmd_result.error()));
             }
         }
 
-        if (run_result.final_state == TaskState::Succeeded) {
-            for (auto s : run_result.node_states) {
-                if (s == TaskState::Canceled) {
-                    run_result.final_state = TaskState::Canceled;
-                    break;
-                }
-            }
-        }
-
-        return run_result;
+        return state.finalize();
     }
 };
 
