@@ -846,6 +846,9 @@ public:
 
     void request_stop() noexcept { backend_->request_stop(); }
 
+    // Expose backend reference for parallel_reduce and other algorithms
+    Backend& backend_ref() noexcept { return *backend_; }
+
 private:
     Outcome<RunResult> execute(TaskIr& ir) {
         auto sstate = std::make_shared<detail::SharedSchedulerState>();
@@ -1218,6 +1221,174 @@ auto parallel_for(std::string name, Range& range, std::size_t chunk_size, F&& bo
 template <typename F>
 Outcome<TaskIr> lower_parallel_for(ParallelForResult<F>& pf) {
     return std::move(pf.ir);
+}
+
+// ============================================================================
+//  SECTION 13: PARALLEL_REDUCE (NAryTree hierarchy)
+// ============================================================================
+
+// Result type for parallel_reduce capturing the NAryTree hierarchy
+template <typename T>
+struct ParallelReduceResult {
+    T value;
+    AlgorithmTree hierarchy;
+    std::size_t chunk_count{0};
+    bool has_error{false};
+    PravahaError error{ErrorKind::InternalError, ""};
+};
+
+// parallel_reduce: splits range into chunks, reduces each chunk in parallel,
+// then combines partial results. Uses NAryTree to represent the fork-join
+// reduction hierarchy.
+//
+// API:
+//   auto result = pravaha::parallel_reduce(runner, range, init, reduce_fn, combine_fn, chunk_size);
+//
+// - runner:     Runner<Backend>& — executes chunk tasks
+// - range:      random-access container with .size() and operator[]
+// - init:       initial value of type T
+// - reduce_fn:  (T accum, std::size_t begin, std::size_t end) -> T
+//               reduces a sub-range [begin, end) into a partial result
+// - combine_fn: (T left, T right) -> T
+//               combines two partial results
+// - chunk_size: number of elements per chunk
+//
+// Returns: Outcome<ParallelReduceResult<T>>
+
+template <typename Backend, typename Range, typename T, typename ReduceFn, typename CombineFn>
+    requires std::invocable<ReduceFn, T, std::size_t, std::size_t>
+          && std::invocable<CombineFn, T, T>
+          && std::copy_constructible<T>
+auto parallel_reduce(
+    Runner<Backend>& runner,
+    Range& range,
+    T init,
+    ReduceFn&& reduce_fn,
+    CombineFn&& combine_fn,
+    std::size_t chunk_size)
+-> Outcome<ParallelReduceResult<T>>
+{
+    std::size_t total = range.size();
+
+    // Empty range returns init immediately
+    if (total == 0) {
+        AlgorithmTree tree(AlgorithmTreeNode{"reduce_root", 0, 0});
+        return ParallelReduceResult<T>{init, std::move(tree), 0, false, PravahaError{ErrorKind::InternalError, ""}};
+    }
+
+    if (chunk_size == 0) chunk_size = 1;
+    std::size_t num_chunks = (total + chunk_size - 1) / chunk_size;
+
+    // Build NAryTree hierarchy: root "reduce" node with chunk children
+    AlgorithmTree tree(AlgorithmTreeNode{"reduce_root", 0, total});
+    auto* root_node = tree.get_root();
+
+    // Add combine node as child of root (represents the combine step)
+    auto* combine_node = tree.insert(root_node, AlgorithmTreeNode{"combine", 0, total});
+
+    // Storage for partial results (one per chunk)
+    auto partials = std::make_shared<std::vector<T>>(num_chunks, init);
+    auto error_flag = std::make_shared<std::atomic<bool>>(false);
+    auto first_error = std::make_shared<PravahaError>(ErrorKind::InternalError, "");
+    auto error_mutex = std::make_shared<std::mutex>();
+
+    // Build chunk tasks as a parallel expression
+    // We build a TaskIr manually with all chunks as independent tasks
+    TaskIr ir;
+    for (std::size_t i = 0; i < num_chunks; ++i) {
+        std::size_t b = i * chunk_size;
+        std::size_t e = std::min(b + chunk_size, total);
+
+        // Add chunk node to tree hierarchy under combine node
+        tree.insert(combine_node, AlgorithmTreeNode{"chunk_" + std::to_string(i), b, e});
+
+        // Capture what we need for the chunk task
+        auto chunk_cmd = TaskCommand::make(
+            [i, b, e, init_val = init, &reduce_fn, partials, error_flag, first_error, error_mutex]() mutable {
+                try {
+                    T partial = reduce_fn(init_val, b, e);
+                    (*partials)[i] = std::move(partial);
+                } catch (const std::exception& ex) {
+                    error_flag->store(true, std::memory_order_release);
+                    std::lock_guard<std::mutex> lk(*error_mutex);
+                    *first_error = PravahaError{ErrorKind::TaskFailed,
+                        std::string{"parallel_reduce chunk failed: "} + ex.what(),
+                        "chunk_" + std::to_string(i)};
+                    throw; // re-throw so TaskCommand records it as failure
+                }
+            });
+        ir.add_node("chunk_" + std::to_string(i), ExecutionDomain::CPU, std::move(chunk_cmd));
+    }
+
+    // All chunk nodes are independent (no edges) — they run in parallel
+    // No validation needed: independent chunks with no edges cannot have cycles.
+
+    // Execute using runner's backend via shared scheduler state
+    auto sstate = std::make_shared<detail::SharedSchedulerState>();
+    sstate->rt = RuntimeState::build(ir);
+    sstate->total_nodes = ir.nodes.size();
+    sstate->count_terminals();
+
+    // Schedule all ready nodes (all chunks are ready since no deps)
+    {
+        std::vector<std::size_t> ready_indices;
+        {
+            std::lock_guard<std::mutex> lock(sstate->mutex);
+            for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
+                if (sstate->rt.node_states[i] == TaskState::Ready) {
+                    sstate->rt.node_states[i] = TaskState::Scheduled;
+                    ready_indices.push_back(i);
+                }
+            }
+            sstate->count_terminals();
+        }
+
+        for (auto idx : ready_indices) {
+            auto* node_cmd_ptr = &ir.nodes[idx].command;
+            auto wrapped = TaskCommand::make(
+                [idx, node_cmd_ptr, sstate]() mutable {
+                    auto result = node_cmd_ptr->run();
+                    {
+                        std::lock_guard<std::mutex> lock(sstate->mutex);
+                        if (result.has_value()) {
+                            sstate->rt.mark_succeeded(idx);
+                        } else {
+                            sstate->rt.mark_failed(idx, std::move(result.error()));
+                        }
+                        sstate->count_terminals();
+                    }
+                    sstate->cv_done.notify_all();
+                });
+            runner.backend_ref().submit(std::move(wrapped));
+        }
+    }
+
+    // Wait for all chunk tasks to complete
+    {
+        std::unique_lock<std::mutex> lock(sstate->mutex);
+        sstate->cv_done.wait(lock, [&]() { return sstate->all_terminal(); });
+    }
+
+    // Check for errors (AllOrNothing semantics)
+    auto run_result = sstate->rt.finalize();
+    if (run_result.final_state == TaskState::Failed) {
+        std::lock_guard<std::mutex> lk(*error_mutex);
+        return std::unexpected(*first_error);
+    }
+
+    // Combine phase: sequentially combine all partial results
+    T combined = (*partials)[0];
+    for (std::size_t i = 1; i < num_chunks; ++i) {
+        combined = combine_fn(std::move(combined), std::move((*partials)[i]));
+    }
+
+    return ParallelReduceResult<T>{
+        std::move(combined),
+        std::move(tree),
+        num_chunks,
+        false,
+        PravahaError{ErrorKind::InternalError, ""}
+    };
 }
 
 } // namespace pravaha

@@ -1231,3 +1231,198 @@ TEST_CASE("parse_pipeline - invalid syntax returns ParseError", "[pravaha][parse
     REQUIRE(!result.has_value());
     REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
 }
+
+// ============================================================================
+// SECTION 23: parallel_reduce (NAryTree hierarchy)
+// ============================================================================
+
+TEST_CASE("parallel_reduce - sum of vector<int>", "[pravaha][reduce]") {
+    std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    pravaha::Runner<> runner;
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        0,  // init
+        [&data](int /*init*/, std::size_t begin, std::size_t end) -> int {
+            int sum = 0;
+            for (std::size_t i = begin; i < end; ++i) sum += data[i];
+            return sum;
+        },
+        [](int left, int right) -> int { return left + right; },
+        3   // chunk_size
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().value == 55);  // 1+2+...+10 = 55
+}
+
+TEST_CASE("parallel_reduce - empty range returns init", "[pravaha][reduce]") {
+    std::vector<int> data;
+    pravaha::Runner<> runner;
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        42,  // init
+        [](int init, std::size_t /*begin*/, std::size_t /*end*/) -> int { return init; },
+        [](int left, int right) -> int { return left + right; },
+        5
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().value == 42);
+    REQUIRE(result.value().chunk_count == 0);
+}
+
+TEST_CASE("parallel_reduce - chunking works correctly", "[pravaha][reduce]") {
+    std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    pravaha::Runner<> runner;
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        0,
+        [&data](int /*init*/, std::size_t begin, std::size_t end) -> int {
+            int sum = 0;
+            for (std::size_t i = begin; i < end; ++i) sum += data[i];
+            return sum;
+        },
+        [](int left, int right) -> int { return left + right; },
+        4   // chunk_size=4 => chunks: [0,4), [4,8), [8,10) = 3 chunks
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().value == 55);
+    REQUIRE(result.value().chunk_count == 3);
+}
+
+TEST_CASE("parallel_reduce - failure returns error", "[pravaha][reduce]") {
+    std::vector<int> data = {1, 2, 3, 4, 5};
+    pravaha::Runner<> runner;
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        0,
+        [](int /*init*/, std::size_t /*begin*/, std::size_t /*end*/) -> int {
+            throw std::runtime_error("chunk exploded");
+        },
+        [](int left, int right) -> int { return left + right; },
+        2
+    );
+
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::TaskFailed);
+}
+
+TEST_CASE("parallel_reduce - NAryTree hierarchy created for chunks", "[pravaha][reduce]") {
+    std::vector<int> data = {1, 2, 3, 4, 5, 6};
+    pravaha::Runner<> runner;
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        0,
+        [&data](int /*init*/, std::size_t begin, std::size_t end) -> int {
+            int sum = 0;
+            for (std::size_t i = begin; i < end; ++i) sum += data[i];
+            return sum;
+        },
+        [](int left, int right) -> int { return left + right; },
+        2   // chunk_size=2 => 3 chunks
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().value == 21);  // 1+2+3+4+5+6
+
+    // Verify NAryTree hierarchy structure
+    auto& tree = result.value().hierarchy;
+    auto* root = tree.get_root();
+    REQUIRE(root != nullptr);
+    REQUIRE(root->data.name == "reduce_root");
+    REQUIRE(root->data.begin == 0);
+    REQUIRE(root->data.end == 6);
+
+    // Root has 1 child: "combine" node
+    REQUIRE(root->children.size() == 1);
+    auto* combine = root->children[0].get();
+    REQUIRE(combine->data.name == "combine");
+
+    // Combine node has 3 chunk children
+    REQUIRE(combine->children.size() == 3);
+    REQUIRE(combine->children[0]->data.name == "chunk_0");
+    REQUIRE(combine->children[0]->data.begin == 0);
+    REQUIRE(combine->children[0]->data.end == 2);
+    REQUIRE(combine->children[1]->data.name == "chunk_1");
+    REQUIRE(combine->children[1]->data.begin == 2);
+    REQUIRE(combine->children[1]->data.end == 4);
+    REQUIRE(combine->children[2]->data.name == "chunk_2");
+    REQUIRE(combine->children[2]->data.begin == 4);
+    REQUIRE(combine->children[2]->data.end == 6);
+}
+
+TEST_CASE("parallel_reduce - single chunk works", "[pravaha][reduce]") {
+    std::vector<int> data = {10, 20, 30};
+    pravaha::Runner<> runner;
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        0,
+        [&data](int /*init*/, std::size_t begin, std::size_t end) -> int {
+            int sum = 0;
+            for (std::size_t i = begin; i < end; ++i) sum += data[i];
+            return sum;
+        },
+        [](int left, int right) -> int { return left + right; },
+        100  // chunk_size > data.size() => 1 chunk
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().value == 60);
+    REQUIRE(result.value().chunk_count == 1);
+}
+
+TEST_CASE("parallel_reduce - works with JThreadBackend", "[pravaha][reduce][jthread]") {
+    std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    pravaha::JThreadBackend backend(2);
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        0,
+        [&data](int /*init*/, std::size_t begin, std::size_t end) -> int {
+            int sum = 0;
+            for (std::size_t i = begin; i < end; ++i) sum += data[i];
+            return sum;
+        },
+        [](int left, int right) -> int { return left + right; },
+        3
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().value == 55);
+}
+
+TEST_CASE("parallel_reduce - product reduction", "[pravaha][reduce]") {
+    std::vector<int> data = {1, 2, 3, 4, 5};
+    pravaha::Runner<> runner;
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        1,  // init for product
+        [&data](int /*init*/, std::size_t begin, std::size_t end) -> int {
+            int product = 1;
+            for (std::size_t i = begin; i < end; ++i) product *= data[i];
+            return product;
+        },
+        [](int left, int right) -> int { return left * right; },
+        2
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().value == 120);  // 5! = 120
+}
