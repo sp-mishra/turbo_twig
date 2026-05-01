@@ -1440,6 +1440,10 @@ inline bool is_parallel_keyword(std::string_view token) {
     return keyword_matches(token, "parallel");
 }
 
+inline bool is_parallel_keyword_misspelling(std::string_view token) {
+    return token.starts_with("parallel") && !is_parallel_keyword(token);
+}
+
 inline bool is_collect_all_keyword(std::string_view token) {
     return keyword_matches(token, "collect_all");
 }
@@ -1824,7 +1828,7 @@ struct Parser {
 
         // If a token looks like a misspelled parallel block intro and is
         // directly followed by '{', report a parallel-keyword diagnostic.
-        if (tok.starts_with("parallel") && tok != "parallel") {
+        if (lithe_frontend::is_parallel_keyword_misspelling(tok)) {
             const auto saved = pos;
             (void)consume_token();
             skip_ws();
