@@ -982,6 +982,31 @@ struct SharedSchedulerState {
                s == TaskState::Skipped || s == TaskState::Canceled;
     }
 
+    [[nodiscard]] bool has_live_work() const {
+        for (auto s : rt.node_states) {
+            if (s == TaskState::Ready || s == TaskState::Scheduled || s == TaskState::Running) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void fail_unresolved_no_progress() {
+        if (all_terminal()) return;
+        if (has_live_work()) return;
+
+        for (auto& s : rt.node_states) {
+            if (!is_terminal(s)) {
+                s = TaskState::Failed;
+            }
+        }
+        rt.errors.push_back(PravahaError{
+            ErrorKind::InternalError,
+            "scheduler made no progress; unresolved non-terminal nodes remain"
+        });
+        count_terminals();
+    }
+
     void count_terminals() {
         terminal_count = 0;
         for (auto s : rt.node_states)
@@ -1029,6 +1054,13 @@ private:
 
         // Submit initially ready nodes
         schedule_ready(ir, sstate);
+
+        // Deadlock guard: no terminal completion possible if scheduler has no live work.
+        {
+            std::lock_guard lock(sstate->mutex);
+            sstate->fail_unresolved_no_progress();
+        }
+        sstate->cv_done.notify_all();
 
         // Wait for all nodes to reach terminal state
         {
@@ -1085,6 +1117,9 @@ private:
                     }
                 }
                 sstate->count_terminals();
+
+                // Deadlock guard after completion scheduling pass.
+                sstate->fail_unresolved_no_progress();
             }
 
             // Submit newly ready nodes
