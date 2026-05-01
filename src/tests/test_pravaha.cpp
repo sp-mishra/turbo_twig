@@ -463,6 +463,24 @@ TEST_CASE("TaskCommand - no std::function usage", "[pravaha][taskcommand]") {
     REQUIRE(result.has_value());
 }
 
+TEST_CASE("TaskCommand - Outcome<Unit> error is propagated", "[pravaha][taskcommand][regression]") {
+    auto cmd = pravaha::TaskCommand::make([]() -> pravaha::Outcome<pravaha::Unit> {
+        return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "propagated failure"});
+    });
+    auto result = cmd.run();
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::TaskFailed);
+    REQUIRE(result.error().message == "propagated failure");
+}
+
+TEST_CASE("TaskCommand - explicit void callable succeeds", "[pravaha][taskcommand][regression]") {
+    int ran = 0;
+    auto cmd = pravaha::TaskCommand::make([&ran]() -> void { ++ran; });
+    auto result = cmd.run();
+    REQUIRE(result.has_value());
+    REQUIRE(ran == 1);
+}
+
 // ============================================================================
 // SECTION 13: Lazy Expression DSL
 // ============================================================================
@@ -1017,6 +1035,15 @@ TEST_CASE("JThreadBackend - no graph logic in backend", "[pravaha][jthread]") {
     REQUIRE(val.load() == 42);
 }
 
+TEST_CASE("JThreadBackend - submit after stop is rejected and drain returns", "[pravaha][jthread][regression]") {
+    std::atomic<int> counter{0};
+    pravaha::JThreadBackend backend(2);
+    backend.request_stop();
+    backend.submit(pravaha::TaskCommand::make([&counter]() { counter.fetch_add(1); }));
+    backend.drain();
+    REQUIRE(counter.load() == 0);
+}
+
 // ============================================================================
 // SECTION 20: Runner with JThreadBackend
 // ============================================================================
@@ -1201,6 +1228,34 @@ TEST_CASE("parse_pipeline - missing symbol returns SymbolNotFound", "[pravaha][p
     REQUIRE(!ir_result.has_value());
     REQUIRE(ir_result.error().kind == pravaha::ErrorKind::SymbolNotFound);
     REQUIRE(ir_result.error().task_identity == "b");
+}
+
+TEST_CASE("symbolic lowering - registered task failure propagates through wrapper", "[pravaha][parse][regression]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { fail_task }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_task("fail_task", []() -> pravaha::Outcome<pravaha::Unit> {
+        return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "symbolic failure"});
+    });
+
+    auto ir_result = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir_result.has_value());
+    REQUIRE(ir_result->nodes.size() == 1);
+
+    auto run_result = ir_result->nodes[0].command.run();
+    REQUIRE(!run_result.has_value());
+    REQUIRE(run_result.error().kind == pravaha::ErrorKind::TaskFailed);
+    REQUIRE(run_result.error().message == "symbolic failure");
+}
+
+TEST_CASE("SymbolRegistry - first registration is safe and runnable", "[pravaha][parse][regression]") {
+    pravaha::SymbolRegistry reg;
+    reg.register_task("first", []() {});
+    auto* cmd = reg.find("first");
+    REQUIRE(cmd != nullptr);
+    auto result = cmd->run();
+    REQUIRE(result.has_value());
 }
 
 TEST_CASE("parse_pipeline - same dependency shape as C++ DSL", "[pravaha][parse]") {
