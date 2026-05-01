@@ -957,16 +957,17 @@ public:
     JThreadBackend(JThreadBackend&&) = delete;
     JThreadBackend& operator=(JThreadBackend&&) = delete;
 
-    void submit(TaskCommand cmd) {
+    bool submit(TaskCommand cmd) {
         {
             std::lock_guard lock(mutex_);
             if (stop_requested_.load(std::memory_order_acquire)) {
-                return;
+                return false;
             }
             in_flight_.fetch_add(1, std::memory_order_release);
             queue_.push_back(std::move(cmd));
         }
         cv_work_.notify_one();
+        return true;
     }
 
     void drain() {
@@ -991,6 +992,41 @@ public:
 };
 
 namespace detail {
+
+template <class Backend>
+[[nodiscard]] bool backend_is_stopped(Backend& backend) {
+    if constexpr (requires(Backend& b) {
+        { b.stopped() } -> std::convertible_to<bool>;
+    }) {
+        return static_cast<bool>(backend.stopped());
+    } else {
+        return false;
+    }
+}
+
+template <class Backend>
+Outcome<Unit> submit_to_backend(Backend& backend, TaskCommand cmd) {
+    if (backend_is_stopped(backend)) {
+        return std::unexpected(PravahaError{ErrorKind::QueueRejected, "backend rejected task submission: stopped"});
+    }
+
+    using submit_result_t = decltype(std::declval<Backend&>().submit(std::declval<TaskCommand>()));
+
+    if constexpr (std::same_as<submit_result_t, Outcome<Unit>>) {
+        return backend.submit(std::move(cmd));
+    } else if constexpr (std::same_as<submit_result_t, bool>) {
+        if (!backend.submit(std::move(cmd))) {
+            return std::unexpected(PravahaError{ErrorKind::QueueRejected, "backend rejected task submission"});
+        }
+        return Outcome<Unit>{Unit{}};
+    } else {
+        backend.submit(std::move(cmd));
+        if (backend_is_stopped(backend)) {
+            return std::unexpected(PravahaError{ErrorKind::QueueRejected, "backend rejected task submission: stopped"});
+        }
+        return Outcome<Unit>{Unit{}};
+    }
+}
 
 struct SharedSchedulerState {
     RuntimeState rt;
@@ -1225,7 +1261,20 @@ private:
             sstate->cv_done.notify_all();
         });
 
-        backend_->submit(std::move(wrapped));
+        auto submit_result = detail::submit_to_backend(*backend_, std::move(wrapped));
+        if (!submit_result.has_value()) {
+            {
+                std::lock_guard lock(sstate->mutex);
+                sstate->rt.mark_failed(idx, PravahaError{
+                    ErrorKind::QueueRejected,
+                    submit_result.error().message,
+                    ir.nodes[idx].name
+                });
+                sstate->count_terminals();
+                (void)NoProgressPolicy::handle_no_progress(*sstate);
+            }
+            sstate->cv_done.notify_all();
+        }
     }
 };
 

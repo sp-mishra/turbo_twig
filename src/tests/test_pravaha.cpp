@@ -1089,6 +1089,24 @@ TEST_CASE("JThreadBackend - submit after stop is rejected and drain returns", "[
     REQUIRE(counter.load() == 0);
 }
 
+TEST_CASE("Runner<JThreadBackend> - stopped backend submit is reported and does not deadlock", "[pravaha][jthread][runner][regression]") {
+    pravaha::JThreadBackend backend(2);
+    backend.request_stop();
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+
+    auto a = pravaha::task("A", []() {});
+    auto result = runner.submit(std::move(a));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    REQUIRE_FALSE(result->errors.empty());
+    const auto err_kind = result->errors.front().kind;
+    const bool accepted_kind =
+        err_kind == pravaha::ErrorKind::QueueRejected
+        || err_kind == pravaha::ErrorKind::TaskFailed;
+    REQUIRE(accepted_kind);
+}
+
 // ============================================================================
 // SECTION 20: Runner with JThreadBackend
 // ============================================================================
