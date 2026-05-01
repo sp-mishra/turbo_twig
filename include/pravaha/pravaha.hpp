@@ -313,9 +313,15 @@ struct IrEdge {
     IrEdge(TaskId f, TaskId t, EdgeKind k) noexcept : from{f}, to{t}, kind{k} {}
 };
 
+struct IrJoinGroup {
+    std::vector<TaskId> members;
+    JoinPolicyKind policy{JoinPolicyKind::AllOrNothing};
+};
+
 struct TaskIr {
     std::vector<IrNode> nodes;
     std::vector<IrEdge> edges;
+    std::vector<IrJoinGroup> join_groups;
 
     TaskId add_node(std::string name, ExecutionDomain domain, TaskCommand cmd) {
         TaskId id{nodes.size()};
@@ -324,6 +330,9 @@ struct TaskIr {
     }
     void add_edge(TaskId from, TaskId to, EdgeKind kind) {
         edges.emplace_back(from, to, kind);
+    }
+    void add_join_group(std::vector<TaskId> members, JoinPolicyKind policy) {
+        join_groups.push_back(IrJoinGroup{std::move(members), policy});
     }
     [[nodiscard]] std::size_t node_count() const noexcept { return nodes.size(); }
     [[nodiscard]] std::size_t edge_count() const noexcept { return edges.size(); }
@@ -345,6 +354,10 @@ inline LowerResult merge_into(LowerResult& dst, LowerResult src) {
     const std::size_t offset = dst.ir.nodes.size();
     for (auto& node : src.ir.nodes) { node.id = TaskId{node.id.value + offset}; dst.ir.nodes.push_back(std::move(node)); }
     for (auto& edge : src.ir.edges) { edge.from = TaskId{edge.from.value + offset}; edge.to = TaskId{edge.to.value + offset}; dst.ir.edges.push_back(std::move(edge)); }
+    for (auto& jg : src.ir.join_groups) {
+        for (auto& m : jg.members) m = TaskId{m.value + offset};
+        dst.ir.join_groups.push_back(std::move(jg));
+    }
     std::vector<TaskId> rs; rs.reserve(src.starts.size());
     for (auto id : src.starts) rs.emplace_back(id.value + offset);
     std::vector<TaskId> rt; rt.reserve(src.terminals.size());
@@ -380,11 +393,21 @@ LowerResult lower_impl(SequenceExpr<L, R> expr) {
 
 template <typename L, typename R>
 LowerResult lower_impl(ParallelExpr<L, R> expr) {
+    JoinPolicyKind policy = expr.policy;
     auto left_result = lower_impl(std::move(expr.left));
     auto right_result = lower_impl(std::move(expr.right));
+    // Capture left terminals before merge (they are the left branch members)
+    std::vector<TaskId> left_terminals = left_result.terminals;
     auto right_remap = merge_into(left_result, std::move(right_result));
     for (auto s : right_remap.starts) left_result.starts.push_back(s);
     for (auto t : right_remap.terminals) left_result.terminals.push_back(t);
+    // Record join group if CollectAll
+    if (policy == JoinPolicyKind::CollectAll) {
+        std::vector<TaskId> members;
+        for (auto t : left_terminals) members.push_back(t);
+        for (auto t : right_remap.terminals) members.push_back(t);
+        left_result.ir.add_join_group(std::move(members), policy);
+    }
     return left_result;
 }
 
@@ -428,8 +451,9 @@ struct RunResult {
 struct RuntimeState {
     std::vector<TaskState> node_states;
     std::vector<std::size_t> remaining_deps;
-    std::vector<std::vector<std::size_t>> successors; // outgoing dep adjacency
+    std::vector<std::vector<std::size_t>> successors;
     std::vector<PravahaError> errors;
+    std::vector<IrJoinGroup> const* join_groups{nullptr};
     bool canceled{false};
 
     static RuntimeState build(const TaskIr& ir) {
@@ -438,6 +462,7 @@ struct RuntimeState {
         rs.node_states.resize(n, TaskState::Created);
         rs.remaining_deps.resize(n, 0);
         rs.successors.resize(n);
+        rs.join_groups = &ir.join_groups;
 
         for (const auto& edge : ir.edges) {
             if (edge.kind != EdgeKind::Sequence && edge.kind != EdgeKind::Data) continue;
@@ -458,22 +483,67 @@ struct RuntimeState {
         return rs;
     }
 
+    [[nodiscard]] bool is_in_collect_all_group(std::size_t idx) const {
+        if (!join_groups) return false;
+        TaskId tid{idx};
+        for (const auto& jg : *join_groups) {
+            if (jg.policy != JoinPolicyKind::CollectAll) continue;
+            for (const auto& m : jg.members) {
+                if (m == tid) return true;
+            }
+        }
+        return false;
+    }
+
     void mark_succeeded(std::size_t idx) {
         node_states[idx] = TaskState::Succeeded;
+        decrement_downstream(idx);
+    }
+
+    void mark_failed_collect_all(std::size_t idx, PravahaError err) {
+        node_states[idx] = TaskState::Failed;
+        errors.push_back(std::move(err));
+        // Don't skip siblings — decrement downstream dep counters so group can complete
+        decrement_downstream(idx);
+    }
+
+    void mark_failed(std::size_t idx, PravahaError err) {
+        if (is_in_collect_all_group(idx)) {
+            mark_failed_collect_all(idx, std::move(err));
+        } else {
+            node_states[idx] = TaskState::Failed;
+            errors.push_back(std::move(err));
+            skip_downstream(idx);
+        }
+    }
+
+    void decrement_downstream(std::size_t idx) {
         for (auto succ : successors[idx]) {
             if (remaining_deps[succ] > 0) {
                 remaining_deps[succ]--;
                 if (remaining_deps[succ] == 0 && node_states[succ] == TaskState::Created) {
-                    node_states[succ] = TaskState::Ready;
+                    // Check if any predecessor of succ has failed — if so, skip
+                    if (has_failed_predecessor(succ)) {
+                        node_states[succ] = TaskState::Skipped;
+                        skip_downstream(succ);
+                    } else {
+                        node_states[succ] = TaskState::Ready;
+                    }
                 }
             }
         }
     }
 
-    void mark_failed(std::size_t idx, PravahaError err) {
-        node_states[idx] = TaskState::Failed;
-        errors.push_back(std::move(err));
-        skip_downstream(idx);
+    [[nodiscard]] bool has_failed_predecessor(std::size_t succ_idx) const {
+        // Check all nodes that have succ_idx as a successor
+        for (std::size_t i = 0; i < successors.size(); ++i) {
+            for (auto s : successors[i]) {
+                if (s == succ_idx && node_states[i] == TaskState::Failed) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     void skip_downstream(std::size_t idx) {

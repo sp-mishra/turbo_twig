@@ -901,3 +901,64 @@ TEST_CASE("Runner parallel - no task runs twice", "[pravaha][runner][parallel]")
     REQUIRE(run_counts[1] == 1);
     REQUIRE(run_counts[2] == 1);
 }
+
+// ============================================================================
+// SECTION 18: CollectAll Join Policy
+// ============================================================================
+
+TEST_CASE("CollectAll - runs both branches even if A fails", "[pravaha][runner][collectall]") {
+    int a_ran = 0, b_ran = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", [&a_ran]() { ++a_ran; throw std::runtime_error("A failed"); });
+    auto b = pravaha::task("B", [&b_ran]() { ++b_ran; });
+    auto par = pravaha::collect_all(std::move(a) & std::move(b));
+    auto result = runner.submit(std::move(par));
+    REQUIRE(result.has_value());
+    REQUIRE(a_ran == 1);
+    REQUIRE(b_ran == 1);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+}
+
+TEST_CASE("CollectAll - errors from failing branches are recorded", "[pravaha][runner][collectall]") {
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() { throw std::runtime_error("err_A"); });
+    auto b = pravaha::task("B", []() { throw std::runtime_error("err_B"); });
+    auto par = pravaha::collect_all(std::move(a) & std::move(b));
+    auto result = runner.submit(std::move(par));
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().errors.size() == 2);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+}
+
+TEST_CASE("CollectAll - downstream C is skipped if any branch failed", "[pravaha][runner][collectall]") {
+    int c_ran = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() { throw std::runtime_error("fail"); });
+    auto b = pravaha::task("B", []() {});
+    auto c = pravaha::task("C", [&c_ran]() { ++c_ran; });
+    auto par = pravaha::collect_all(std::move(a) & std::move(b));
+    auto expr = std::move(par) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(c_ran == 0);
+    REQUIRE(result.value().node_states[2] == pravaha::TaskState::Skipped);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+}
+
+TEST_CASE("CollectAll - normal AllOrNothing behavior remains unchanged", "[pravaha][runner][collectall]") {
+    int b_ran = 0;
+    pravaha::Runner<> runner;
+    // Default is AllOrNothing - A fails, B should still run (parallel sibling, no dep)
+    // But downstream C should be skipped
+    auto a = pravaha::task("A", []() { throw std::runtime_error("fail"); });
+    auto b = pravaha::task("B", [&b_ran]() { ++b_ran; });
+    auto c = pravaha::task("C", []() {});
+    auto expr = (std::move(a) & std::move(b)) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    // B still runs because it's a sibling with no dependency on A
+    REQUIRE(b_ran == 1);
+    // C is skipped because A (predecessor via edge) failed
+    REQUIRE(result.value().node_states[2] == pravaha::TaskState::Skipped);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+}
