@@ -1609,6 +1609,33 @@ TEST_CASE("parse_pipeline stores lithe frontend metadata", "[pravaha][parse][lit
     REQUIRE_FALSE(task->frontend.dump.empty());
 }
 
+TEST_CASE("parse_pipeline uses lithe frontend header", "[pravaha][parse][lithe]") {
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { a then b }");
+        REQUIRE(result.has_value());
+        REQUIRE(result->name == "p");
+        REQUIRE(result->frontend.hash != 0);
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipelinex p { a }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline then { a }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p a }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+}
+
 TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
     REQUIRE(result.has_value());
