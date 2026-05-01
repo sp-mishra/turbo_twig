@@ -1493,6 +1493,41 @@ TEST_CASE("pravaha lithe frontend parses pipeline header", "[pravaha][parse][lit
     }
 }
 
+TEST_CASE("pravaha lithe frontend parses parallel intro", "[pravaha][parse][lithe]") {
+    using pravaha::symbolic::lithe_frontend::parse_parallel_intro;
+
+    {
+        auto parsed = parse_parallel_intro("parallel { a, b }", 0);
+        REQUIRE(parsed.has_value());
+        REQUIRE(parsed->lithe_hash != 0);
+        REQUIRE(parsed->lithe_dump.find("pravaha.parallel") != std::string::npos);
+    }
+
+    {
+        auto parsed = parse_parallel_intro("   parallel   { a, b }", 0);
+        REQUIRE(parsed.has_value());
+    }
+
+    {
+        auto parsed = parse_parallel_intro("parallelx { a, b }", 0);
+        REQUIRE(!parsed.has_value());
+        REQUIRE(parsed.error().kind == pravaha::ErrorKind::ParseError);
+    }
+
+    {
+        auto parsed = parse_parallel_intro("parallel_task { a, b }", 0);
+        REQUIRE(!parsed.has_value());
+        REQUIRE(parsed.error().kind == pravaha::ErrorKind::ParseError);
+    }
+
+    {
+        auto parsed = parse_parallel_intro("parallel a, b }", 0);
+        REQUIRE(!parsed.has_value());
+        REQUIRE(parsed.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(parsed.error().message.find("{") != std::string::npos);
+    }
+}
+
 TEST_CASE("lithe_bridge - keyword exact match", "[pravaha][parse][lithe]") {
     REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("pipeline", "pipeline"));
     REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("pipelineX", "pipeline"));

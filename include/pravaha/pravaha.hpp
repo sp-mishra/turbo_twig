@@ -1353,6 +1353,13 @@ struct PipelineHeaderParse {
     std::size_t lithe_hash{};
 };
 
+struct ParallelIntroParse {
+    std::size_t body_start_offset{};
+    CapturedToken parallel_keyword;
+    std::string lithe_dump;
+    std::size_t lithe_hash{};
+};
+
 inline auto token_expr(TokenCapture capture) {
     return lithe::make_node<token_tag>(lithe::as_expr(std::move(capture)));
 }
@@ -1542,6 +1549,32 @@ inline Outcome<PipelineHeaderParse> parse_pipeline_header(std::string_view text)
     out.pipeline_name = std::move(*name);
     out.lithe_dump = lithe::emit::dump(header_expr);
     out.lithe_hash = lithe::emit::structural_hash(header_expr);
+    return out;
+}
+
+inline Outcome<ParallelIntroParse> parse_parallel_intro(std::string_view text, std::size_t offset) {
+    auto kw = capture_keyword(text, offset, "parallel", "parallel_keyword");
+    if (!kw.has_value()) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'parallel'"});
+    }
+
+    std::size_t pos = kw->capture.end;
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+    if (pos >= text.size() || text[pos] != '{') {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after parallel"});
+    }
+
+    const auto intro_expr = lithe::make_node<parallel_tag>(
+        keyword_expr(kw->capture.text, kw->capture.begin, kw->capture.end)
+    );
+
+    ParallelIntroParse out;
+    out.body_start_offset = pos + 1;
+    out.parallel_keyword = std::move(*kw);
+    out.lithe_dump = lithe::emit::dump(intro_expr);
+    out.lithe_hash = lithe::emit::structural_hash(intro_expr);
     return out;
 }
 
