@@ -74,6 +74,15 @@ using Outcome = std::expected<T, PravahaError>;
 
 using Unit = std::monostate;
 
+template<class T>
+struct is_outcome : std::false_type {};
+
+template<class T>
+struct is_outcome<Outcome<T>> : std::true_type {};
+
+template<class T>
+inline constexpr bool is_outcome_v = is_outcome<std::remove_cvref_t<T>>::value;
+
 // ============================================================================
 //  SECTION 2: ENUMERATIONS
 // ============================================================================
@@ -186,6 +195,12 @@ class TaskCommand {
                 return Outcome<Unit>{Unit{}};
             } else if constexpr (std::same_as<std::remove_cvref_t<R>, Outcome<Unit>>) {
                 return fn();
+            } else if constexpr (is_outcome_v<R>) {
+                auto out = fn();
+                if (!out.has_value()) {
+                    return std::unexpected(out.error());
+                }
+                return Outcome<Unit>{Unit{}};
             } else {
                 // v0.1 compatibility: invoke unsupported return types and treat as success.
                 (void)fn();

@@ -490,6 +490,34 @@ TEST_CASE("TaskCommand - explicit void callable succeeds", "[pravaha][taskcomman
     REQUIRE(ran == 1);
 }
 
+TEST_CASE("TaskCommand - Outcome<string> success is treated as success", "[pravaha][taskcommand][regression]") {
+    auto cmd = pravaha::TaskCommand::make([]() -> pravaha::Outcome<std::string> {
+        return std::string{"ok"};
+    });
+    auto result = cmd.run();
+    REQUIRE(result.has_value());
+}
+
+TEST_CASE("TaskCommand - Outcome<string> error is propagated", "[pravaha][taskcommand][regression]") {
+    auto cmd = pravaha::TaskCommand::make([]() -> pravaha::Outcome<std::string> {
+        return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "string failure"});
+    });
+    auto result = cmd.run();
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::TaskFailed);
+    REQUIRE(result.error().message == "string failure");
+}
+
+TEST_CASE("TaskCommand - Outcome<int> error is propagated", "[pravaha][taskcommand][regression]") {
+    auto cmd = pravaha::TaskCommand::make([]() -> pravaha::Outcome<int> {
+        return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::InternalError, "int failure"});
+    });
+    auto result = cmd.run();
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::InternalError);
+    REQUIRE(result.error().message == "int failure");
+}
+
 // ============================================================================
 // SECTION 13: Lazy Expression DSL
 // ============================================================================
