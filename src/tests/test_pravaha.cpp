@@ -1264,6 +1264,27 @@ TEST_CASE("lithe_bridge - reserved keyword cannot be identifier", "[pravaha][par
     REQUIRE(!pravaha::symbolic::lithe_bridge::identifier_matches("then"));
 }
 
+TEST_CASE("lithe_bridge - parse_pipeline_header success", "[pravaha][parse][lithe]") {
+    constexpr std::string_view src = "pipeline p { a then b }";
+    auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header(src);
+    REQUIRE(header.has_value());
+    REQUIRE(header->pipeline_name == "p");
+    REQUIRE(header->open_brace_offset == src.find('{'));
+    REQUIRE(header->body_start_offset == src.find('{') + 1);
+}
+
+TEST_CASE("lithe_bridge - parse_pipeline_header rejects bad keyword", "[pravaha][parse][lithe]") {
+    auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header("pipelinex p { a }");
+    REQUIRE(!header.has_value());
+    REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
+}
+
+TEST_CASE("lithe_bridge - parse_pipeline_header rejects reserved name", "[pravaha][parse][lithe]") {
+    auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header("pipeline then { a }");
+    REQUIRE(!header.has_value());
+    REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
+}
+
 TEST_CASE("parse_pipeline - simple sequence", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then b then c }");
     REQUIRE(result.has_value());

@@ -1217,6 +1217,51 @@ inline bool identifier_matches(std::string_view token) {
     return true;
 }
 
+struct PipelineHeaderParse {
+    std::string pipeline_name;
+    std::size_t body_start_offset{0};
+    std::size_t open_brace_offset{0};
+};
+
+inline Outcome<PipelineHeaderParse> parse_pipeline_header(std::string_view text) {
+    std::size_t pos = 0;
+    auto skip_ws = [&]() {
+        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
+    };
+
+    auto read_token = [&]() -> std::string_view {
+        skip_ws();
+        if (pos >= text.size()) return {};
+        std::size_t start = pos;
+        while (pos < text.size() && !std::isspace(static_cast<unsigned char>(text[pos]))
+               && text[pos] != '{' && text[pos] != '}' && text[pos] != ',') {
+            ++pos;
+        }
+        return text.substr(start, pos - start);
+    };
+
+    auto kw = read_token();
+    if (!is_pipeline_keyword(kw)) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected 'pipeline' keyword"});
+    }
+
+    auto name_tok = read_token();
+    if (!identifier_matches(name_tok)) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "Invalid pipeline name"});
+    }
+
+    skip_ws();
+    if (pos >= text.size() || text[pos] != '{') {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '{'"});
+    }
+
+    const std::size_t brace = pos;
+    ++pos;
+    return PipelineHeaderParse{std::string(name_tok), pos, brace};
+}
+
 } // namespace lithe_bridge
 
 struct SymbolicTaskExpr { std::string name; };
@@ -1337,19 +1382,14 @@ struct Parser {
     }
 
     Outcome<SymbolicPipeline> parse_pipeline() {
-        skip_ws();
-        auto kw = consume_token();
-        if (!lithe_bridge::is_pipeline_keyword(kw)) {
-            return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected 'pipeline' keyword"});
-        }
-        skip_ws();
-        auto name_tok = consume_token();
-        if (!is_valid_identifier(name_tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Invalid pipeline name"});
-        if (!expect("{")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '{'"});
+        auto header = lithe_bridge::parse_pipeline_header(src);
+        if (!header.has_value()) return std::unexpected(header.error());
+        pos = header->body_start_offset;
+
         auto body = parse_sequence();
         if (!body.has_value()) return std::unexpected(body.error());
         if (!expect("}")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '}'"});
-        return SymbolicPipeline{std::string(name_tok), std::move(body.value())};
+        return SymbolicPipeline{std::move(header->pipeline_name), std::move(body.value())};
     }
 };
 
