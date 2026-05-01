@@ -93,7 +93,12 @@ template <typename T>
 concept LocalPayload = Payload<T> && std::move_constructible<T>;
 
 template <typename T>
-concept TransferablePayload = Payload<T> && std::copy_constructible<T>;
+concept TransferablePayload = Payload<T>
+    && std::is_trivially_copyable_v<T>
+    && std::is_standard_layout_v<T>;
+
+template <typename T>
+concept CopyablePayload = Payload<T> && std::copy_constructible<T>;
 
 namespace detail {
 template <typename T>

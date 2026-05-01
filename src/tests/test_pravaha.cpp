@@ -198,17 +198,26 @@ TEST_CASE("LocalPayload concept", "[pravaha][concepts]") {
 // SECTION 7: TransferablePayload Concept
 // ============================================================================
 
-TEST_CASE("TransferablePayload concept - copyable types", "[pravaha][concepts]") {
+TEST_CASE("TransferablePayload concept - memory-safe transferable types", "[pravaha][concepts]") {
     STATIC_REQUIRE(pravaha::TransferablePayload<int>);
     STATIC_REQUIRE(pravaha::TransferablePayload<double>);
-    STATIC_REQUIRE(pravaha::TransferablePayload<std::string>);
-    STATIC_REQUIRE(pravaha::TransferablePayload<std::vector<int>>);
     STATIC_REQUIRE(pravaha::TransferablePayload<TrivialPoint>);
-    STATIC_REQUIRE(pravaha::TransferablePayload<NonTrivial>);
+}
+
+TEST_CASE("TransferablePayload concept - non-trivial or heap-owning types excluded", "[pravaha][concepts]") {
+    STATIC_REQUIRE(!pravaha::TransferablePayload<std::string>);
+    STATIC_REQUIRE(!pravaha::TransferablePayload<std::vector<int>>);
+    STATIC_REQUIRE(!pravaha::TransferablePayload<NonTrivial>);
 }
 
 TEST_CASE("TransferablePayload concept - move-only types excluded", "[pravaha][concepts]") {
     STATIC_REQUIRE(!pravaha::TransferablePayload<MoveOnly>);
+}
+
+TEST_CASE("CopyablePayload concept - local copyability", "[pravaha][concepts]") {
+    STATIC_REQUIRE(pravaha::CopyablePayload<std::string>);
+    STATIC_REQUIRE(pravaha::CopyablePayload<std::vector<int>>);
+    STATIC_REQUIRE(!pravaha::CopyablePayload<MoveOnly>);
 }
 
 // ============================================================================
