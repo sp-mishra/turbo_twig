@@ -1344,12 +1344,21 @@ TEST_CASE("lithe_bridge - parse_pipeline_header rejects bad keyword", "[pravaha]
     auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header("pipelinex p { a }");
     REQUIRE(!header.has_value());
     REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
+    REQUIRE(header.error().message.find("pipeline") != std::string::npos);
 }
 
 TEST_CASE("lithe_bridge - parse_pipeline_header rejects reserved name", "[pravaha][parse][lithe]") {
     auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header("pipeline then { a }");
     REQUIRE(!header.has_value());
     REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
+    REQUIRE(header.error().message.find("reserved") != std::string::npos);
+}
+
+TEST_CASE("lithe_bridge - parse_pipeline_header rejects missing brace", "[pravaha][parse][lithe]") {
+    auto header = pravaha::symbolic::lithe_bridge::parse_pipeline_header("pipeline p a }");
+    REQUIRE(!header.has_value());
+    REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
+    REQUIRE(header.error().message.find("{") != std::string::npos);
 }
 
 TEST_CASE("lithe_bridge - parse_parallel_intro success", "[pravaha][parse][lithe]") {

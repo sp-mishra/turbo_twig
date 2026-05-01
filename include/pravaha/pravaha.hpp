@@ -1293,17 +1293,26 @@ inline Outcome<PipelineHeaderParse> parse_pipeline_header(std::string_view text)
 
     auto kw = read_token();
     if (!is_pipeline_keyword(kw)) {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected 'pipeline' keyword"});
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'pipeline'"});
     }
 
     auto name_tok = read_token();
+    if (name_tok.empty()) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected identifier after pipeline"});
+    }
+    if (is_reserved_keyword(name_tok)) {
+        return std::unexpected(PravahaError{
+            ErrorKind::ParseError,
+            "reserved keyword cannot be used as task identifier: " + std::string(name_tok)
+        });
+    }
     if (!identifier_matches(name_tok)) {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "Invalid pipeline name"});
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected identifier after pipeline"});
     }
 
     skip_ws();
     if (pos >= text.size() || text[pos] != '{') {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '{'"});
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after pipeline name"});
     }
 
     const std::size_t brace = pos;
@@ -1332,12 +1341,12 @@ inline Outcome<std::size_t> parse_parallel_intro(std::string_view text, std::siz
 
     auto kw = read_token();
     if (!is_parallel_keyword(kw)) {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected 'parallel' keyword"});
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'parallel'"});
     }
 
     skip_ws();
     if (pos >= text.size() || text[pos] != '{') {
-        return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '{' after parallel"});
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after parallel"});
     }
 
     ++pos;
