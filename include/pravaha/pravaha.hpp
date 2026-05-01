@@ -6,6 +6,9 @@
 // ============================================================================
 
 #include <atomic>
+#include <algorithm>
+#include <cctype>
+#include <compare>
 #include <concepts>
 #include <condition_variable>
 #include <cstddef>
@@ -1303,10 +1306,9 @@ public:
 
     template <typename F> requires std::move_constructible<std::decay_t<F>> && std::invocable<std::decay_t<F>>
     void register_task(std::string name, F&& f) {
-        // Insert name first so debug-name source is stable before command construction.
-        entries_.push_back(Entry{std::move(name), TaskCommand{}});
-        auto& entry = entries_.back();
-        entry.cmd = TaskCommand::make(std::forward<F>(f), entry.name);
+        std::string debug_name{name};
+        auto cmd = TaskCommand::make(std::forward<F>(f), debug_name);
+        entries_.push_back(Entry{std::move(name), std::move(cmd)});
     }
 
     void register_command(std::string name, TaskCommand cmd) {
