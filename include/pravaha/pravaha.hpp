@@ -1260,7 +1260,10 @@ public:
 
     template <typename F> requires std::move_constructible<std::decay_t<F>> && std::invocable<std::decay_t<F>>
     void register_task(std::string name, F&& f) {
-        entries_.push_back(Entry{std::move(name), TaskCommand::make(std::forward<F>(f), entries_.back().name)});
+        // Insert name first so debug-name source is stable before command construction.
+        entries_.push_back(Entry{std::move(name), TaskCommand{}});
+        auto& entry = entries_.back();
+        entry.cmd = TaskCommand::make(std::forward<F>(f), entry.name);
     }
 
     void register_command(std::string name, TaskCommand cmd) {
