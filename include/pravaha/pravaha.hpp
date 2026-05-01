@@ -1033,10 +1033,16 @@ using DefaultGraphValidationPolicy = DefaultGraphAlgorithmPolicy;
 struct DefaultReadyPolicy {
     template <class RuntimeStateLike>
     static bool is_ready(const RuntimeStateLike& state, std::size_t index) {
-        return !state.canceled
-            && index < state.node_states.size()
-            && state.node_states[index] == TaskState::Ready
-            && state.remaining_deps[index] == 0;
+        if (state.canceled) return false;
+        if (index >= state.node_states.size() || index >= state.remaining_deps.size()) return false;
+        if (state.remaining_deps[index] != 0) return false;
+
+        // Accept either state model: precomputed Ready nodes or Created+deps==0 nodes.
+        const auto node_state = state.node_states[index];
+        const bool schedulable_state =
+            node_state == TaskState::Ready || node_state == TaskState::Created;
+
+        return schedulable_state;
     }
 };
 

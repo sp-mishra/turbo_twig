@@ -1189,6 +1189,16 @@ struct CountingNoProgressPolicy {
     }
 };
 
+struct CountingReadyPolicy {
+    static inline int ready_checks = 0;
+
+    template <class RuntimeStateLike>
+    static bool is_ready(const RuntimeStateLike& state, std::size_t index) {
+        ++ready_checks;
+        return pravaha::DefaultReadyPolicy::is_ready(state, index);
+    }
+};
+
 TEST_CASE("Runner policy slot - custom GraphAlgorithmPolicy is used", "[pravaha][runner][policy]") {
     CountingGraphPolicy::validate_calls = 0;
     pravaha::Runner<pravaha::InlineBackend, CountingGraphPolicy> runner;
@@ -1210,6 +1220,19 @@ TEST_CASE("Runner policy slot - custom NoProgressPolicy is used", "[pravaha][run
     auto result = runner.submit(std::move(a));
     REQUIRE(result.has_value());
     REQUIRE(CountingNoProgressPolicy::checks > 0);
+}
+
+TEST_CASE("Runner policy slot - custom ReadyPolicy is used", "[pravaha][runner][policy]") {
+    CountingReadyPolicy::ready_checks = 0;
+    pravaha::Runner<pravaha::InlineBackend,
+                    pravaha::DefaultGraphAlgorithmPolicy,
+                    CountingReadyPolicy> runner;
+    auto a = pravaha::task("A", []() {});
+    auto b = pravaha::task("B", []() {});
+    auto expr = std::move(a) | std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(CountingReadyPolicy::ready_checks > 0);
 }
 
 // ============================================================================
