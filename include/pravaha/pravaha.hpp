@@ -1162,6 +1162,64 @@ inline Outcome<TaskIr> lower_symbolic_pipeline(const symbolic::SymbolicPipeline&
     return ir;
 }
 
+// ============================================================================
+//  SECTION 12: PARALLEL_FOR (NAryTree hierarchy)
+// ============================================================================
+
+struct AlgorithmTreeNode {
+    std::string name;
+    std::size_t begin{0};
+    std::size_t end{0};
+    bool operator==(const AlgorithmTreeNode&) const = default;
+};
+
+using AlgorithmTree = NAryTree<AlgorithmTreeNode>;
+
+template <typename F>
+struct ParallelForResult {
+    TaskIr ir;
+    AlgorithmTree hierarchy;
+    std::size_t chunk_count{0};
+};
+
+template <typename Range, typename F>
+    requires std::invocable<F, std::size_t, std::size_t>
+auto parallel_for(std::string name, Range& range, std::size_t chunk_size, F&& body) {
+    std::size_t total = range.size();
+    if (chunk_size == 0) chunk_size = 1;
+    std::size_t num_chunks = (total + chunk_size - 1) / chunk_size;
+
+    // Build NAryTree hierarchy
+    AlgorithmTree tree(AlgorithmTreeNode{name, 0, total});
+    auto* root_node = tree.get_root();
+
+    // Build TaskIr with parallel chunk tasks
+    TaskIr ir;
+    std::vector<TaskId> chunk_ids;
+    chunk_ids.reserve(num_chunks);
+
+    for (std::size_t i = 0; i < num_chunks; ++i) {
+        std::size_t b = i * chunk_size;
+        std::size_t e = std::min(b + chunk_size, total);
+
+        // Add to NAryTree hierarchy
+        tree.insert(root_node, AlgorithmTreeNode{name + "_chunk_" + std::to_string(i), b, e});
+
+        // Create chunk task command
+        auto cmd = TaskCommand::make([&body, b, e]() { body(b, e); });
+        TaskId id = ir.add_node(name + "_chunk_" + std::to_string(i), ExecutionDomain::CPU, std::move(cmd));
+        chunk_ids.push_back(id);
+    }
+
+    // No edges between chunks — they are all parallel (AllOrNothing)
+    return ParallelForResult<F>{std::move(ir), std::move(tree), num_chunks};
+}
+
+template <typename F>
+Outcome<TaskIr> lower_parallel_for(ParallelForResult<F>& pf) {
+    return std::move(pf.ir);
+}
+
 } // namespace pravaha
 
 // std::hash specializations for LiteGraph Hashable concept
