@@ -1169,3 +1169,65 @@ TEST_CASE("Domain - error kind is DomainConstraintViolation", "[pravaha][domain]
     REQUIRE(result.error().kind == pravaha::ErrorKind::DomainConstraintViolation);
     REQUIRE(result.error().task_identity == "bad_payload");
 }
+
+// ============================================================================
+// SECTION 22: Textual Pipeline Parsing (Lithe)
+// ============================================================================
+
+TEST_CASE("parse_pipeline - simple sequence", "[pravaha][parse]") {
+    auto result = pravaha::parse_pipeline("pipeline p { a then b then c }");
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().name == "p");
+}
+
+TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
+    auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().name == "p");
+}
+
+TEST_CASE("parse_pipeline - does not execute tasks", "[pravaha][parse]") {
+    int counter = 0;
+    auto result = pravaha::parse_pipeline("pipeline p { a then b }");
+    REQUIRE(result.has_value());
+    REQUIRE(counter == 0);
+}
+
+TEST_CASE("parse_pipeline - missing symbol returns SymbolNotFound", "[pravaha][parse]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { a then b }");
+    REQUIRE(parsed.has_value());
+    pravaha::SymbolRegistry reg;
+    reg.register_command("a", pravaha::TaskCommand::make([](){}));
+    // "b" not registered
+    auto ir_result = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(!ir_result.has_value());
+    REQUIRE(ir_result.error().kind == pravaha::ErrorKind::SymbolNotFound);
+    REQUIRE(ir_result.error().task_identity == "b");
+}
+
+TEST_CASE("parse_pipeline - same dependency shape as C++ DSL", "[pravaha][parse]") {
+    // C++ DSL: a | parallel{b,c} | d => a then (b & c) then d
+    // Textual: pipeline p { a then parallel { b, c } then d }
+    auto parsed = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_command("a", pravaha::TaskCommand::make([](){}));
+    reg.register_command("b", pravaha::TaskCommand::make([](){}));
+    reg.register_command("c", pravaha::TaskCommand::make([](){}));
+    reg.register_command("d", pravaha::TaskCommand::make([](){}));
+
+    auto ir_result = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir_result.has_value());
+    auto& ir = ir_result.value();
+    // Should have 4 nodes: a, b, c, d
+    REQUIRE(ir.node_count() == 4);
+    // Edges: a->b, a->c (from parallel), b->d, c->d
+    REQUIRE(ir.edge_count() == 4);
+}
+
+TEST_CASE("parse_pipeline - invalid syntax returns ParseError", "[pravaha][parse]") {
+    auto result = pravaha::parse_pipeline("not_a_pipeline { }");
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+}

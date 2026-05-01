@@ -929,6 +929,239 @@ private:
 // Specialization behavior: InlineBackend submit returns Outcome, JThreadBackend submit is void.
 // We need the Runner to work with both. The wrapped TaskCommand handles everything internally.
 
+// ============================================================================
+//  SECTION 11: TEXTUAL PIPELINE PARSING (v0.1 bridge using Lithe)
+// ============================================================================
+// Lithe (edsl/lithe.hpp) is a compile-time expression template EDSL.
+// For v0.1, we use Lithe's SymbolicExpression/expr<> infrastructure for
+// keyword/identifier validation, and implement a minimal recursive descent
+// parser for the textual pipeline syntax.
+
+namespace symbolic {
+
+struct SymbolicTaskExpr { std::string name; };
+struct SymbolicSequenceExpr;
+struct SymbolicParallelExpr;
+
+using SymbolicExpr = std::variant<
+    SymbolicTaskExpr,
+    std::unique_ptr<SymbolicSequenceExpr>,
+    std::unique_ptr<SymbolicParallelExpr>
+>;
+
+struct SymbolicSequenceExpr { SymbolicExpr left; SymbolicExpr right; };
+struct SymbolicParallelExpr { std::vector<SymbolicExpr> branches; };
+
+struct SymbolicPipeline {
+    std::string name;
+    SymbolicExpr root;
+};
+
+// Lithe-validated keyword set
+inline bool is_keyword(std::string_view token) {
+    static constexpr std::string_view keywords[] = {"pipeline", "then", "parallel"};
+    for (auto kw : keywords) if (token == kw) return true;
+    return false;
+}
+
+inline bool is_valid_identifier(std::string_view token) {
+    if (token.empty() || is_keyword(token)) return false;
+    if (!std::isalpha(static_cast<unsigned char>(token[0])) && token[0] != '_') return false;
+    for (auto c : token) if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') return false;
+    return true;
+}
+
+namespace detail {
+
+struct Parser {
+    std::string_view src;
+    std::size_t pos{0};
+
+    void skip_ws() { while (pos < src.size() && std::isspace(static_cast<unsigned char>(src[pos]))) ++pos; }
+
+    std::string_view peek_token() {
+        skip_ws();
+        if (pos >= src.size()) return {};
+        if (src[pos] == '{' || src[pos] == '}' || src[pos] == ',') return src.substr(pos, 1);
+        std::size_t start = pos;
+        while (pos < src.size() && !std::isspace(static_cast<unsigned char>(src[pos]))
+               && src[pos] != '{' && src[pos] != '}' && src[pos] != ',') ++pos;
+        auto tok = src.substr(start, pos - start);
+        pos = start; // don't consume
+        return tok;
+    }
+
+    std::string_view consume_token() {
+        skip_ws();
+        if (pos >= src.size()) return {};
+        if (src[pos] == '{' || src[pos] == '}' || src[pos] == ',') return src.substr(pos++, 1);
+        std::size_t start = pos;
+        while (pos < src.size() && !std::isspace(static_cast<unsigned char>(src[pos]))
+               && src[pos] != '{' && src[pos] != '}' && src[pos] != ',') ++pos;
+        return src.substr(start, pos - start);
+    }
+
+    bool expect(std::string_view expected) {
+        skip_ws();
+        auto tok = consume_token();
+        return tok == expected;
+    }
+
+    Outcome<SymbolicExpr> parse_parallel() {
+        if (!expect("{")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '{' after 'parallel'"});
+        std::vector<SymbolicExpr> branches;
+        while (true) {
+            skip_ws();
+            auto tok = peek_token();
+            if (tok == "}") { consume_token(); break; }
+            if (tok.empty()) return std::unexpected(PravahaError{ErrorKind::ParseError, "Unexpected end in parallel block"});
+            if (!branches.empty()) {
+                if (tok == ",") consume_token();
+                else return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected ',' between parallel branches"});
+                tok = peek_token();
+            }
+            if (!is_valid_identifier(tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Invalid identifier in parallel: " + std::string(tok)});
+            consume_token();
+            branches.push_back(SymbolicTaskExpr{std::string(tok)});
+        }
+        if (branches.empty()) return std::unexpected(PravahaError{ErrorKind::ParseError, "Empty parallel block"});
+        auto par = std::make_unique<SymbolicParallelExpr>();
+        par->branches = std::move(branches);
+        return SymbolicExpr{std::move(par)};
+    }
+
+    Outcome<SymbolicExpr> parse_step() {
+        skip_ws();
+        auto tok = peek_token();
+        if (tok == "parallel") {
+            consume_token();
+            return parse_parallel();
+        }
+        if (!is_valid_identifier(tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected identifier, got: " + std::string(tok)});
+        consume_token();
+        return SymbolicExpr{SymbolicTaskExpr{std::string(tok)}};
+    }
+
+    Outcome<SymbolicExpr> parse_sequence() {
+        auto first = parse_step();
+        if (!first.has_value()) return first;
+        auto current = std::move(first.value());
+        while (true) {
+            skip_ws();
+            auto tok = peek_token();
+            if (tok != "then") break;
+            consume_token();
+            auto next = parse_step();
+            if (!next.has_value()) return next;
+            auto seq = std::make_unique<SymbolicSequenceExpr>();
+            seq->left = std::move(current);
+            seq->right = std::move(next.value());
+            current = SymbolicExpr{std::move(seq)};
+        }
+        return current;
+    }
+
+    Outcome<SymbolicPipeline> parse_pipeline() {
+        if (!expect("pipeline")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected 'pipeline' keyword"});
+        skip_ws();
+        auto name_tok = consume_token();
+        if (!is_valid_identifier(name_tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Invalid pipeline name"});
+        if (!expect("{")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '{'"});
+        auto body = parse_sequence();
+        if (!body.has_value()) return std::unexpected(body.error());
+        if (!expect("}")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '}'"});
+        return SymbolicPipeline{std::string(name_tok), std::move(body.value())};
+    }
+};
+
+} // namespace detail
+} // namespace symbolic
+
+inline Outcome<symbolic::SymbolicPipeline> parse_pipeline(std::string_view text) {
+    symbolic::detail::Parser parser{text};
+    return parser.parse_pipeline();
+}
+
+// ============================================================================
+//  SECTION 11.5: SYMBOL REGISTRY & SYMBOLIC LOWERING
+// ============================================================================
+
+class SymbolRegistry {
+    struct Entry { std::string name; TaskCommand cmd; };
+    std::vector<Entry> entries_;
+public:
+    SymbolRegistry() = default;
+
+    template <typename F> requires std::move_constructible<std::decay_t<F>> && std::invocable<std::decay_t<F>>
+    void register_task(std::string name, F&& f) {
+        entries_.push_back(Entry{std::move(name), TaskCommand::make(std::forward<F>(f), entries_.back().name)});
+    }
+
+    void register_command(std::string name, TaskCommand cmd) {
+        entries_.push_back(Entry{std::move(name), std::move(cmd)});
+    }
+
+    TaskCommand* find(const std::string& name) {
+        for (auto& e : entries_) if (e.name == name) return &e.cmd;
+        return nullptr;
+    }
+};
+
+namespace detail {
+
+inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, SymbolRegistry& reg,
+    TaskIr& ir, std::vector<TaskId>& starts, std::vector<TaskId>& terminals) {
+
+    if (auto* task = std::get_if<symbolic::SymbolicTaskExpr>(&expr)) {
+        auto* cmd_ptr = reg.find(task->name);
+        if (!cmd_ptr) return std::unexpected(PravahaError{ErrorKind::SymbolNotFound, "Symbol not found: " + task->name, task->name});
+        // Create a placeholder command that delegates to the registered one
+        auto* raw = cmd_ptr;
+        auto wrapper = TaskCommand::make([raw]() { raw->run(); });
+        TaskId id = ir.add_node(task->name, ExecutionDomain::CPU, std::move(wrapper));
+        starts.push_back(id);
+        terminals.push_back(id);
+        return Unit{};
+    }
+
+    if (auto* seq_ptr = std::get_if<std::unique_ptr<symbolic::SymbolicSequenceExpr>>(&expr)) {
+        auto& seq = **seq_ptr;
+        std::vector<TaskId> left_starts, left_terminals, right_starts, right_terminals;
+        auto lr = lower_symbolic_expr(seq.left, reg, ir, left_starts, left_terminals);
+        if (!lr.has_value()) return lr;
+        auto rr = lower_symbolic_expr(seq.right, reg, ir, right_starts, right_terminals);
+        if (!rr.has_value()) return rr;
+        for (auto t : left_terminals) for (auto s : right_starts) ir.add_edge(t, s, EdgeKind::Sequence);
+        starts = std::move(left_starts);
+        terminals = std::move(right_terminals);
+        return Unit{};
+    }
+
+    if (auto* par_ptr = std::get_if<std::unique_ptr<symbolic::SymbolicParallelExpr>>(&expr)) {
+        auto& par = **par_ptr;
+        for (auto& branch : par.branches) {
+            std::vector<TaskId> bs, bt;
+            auto br = lower_symbolic_expr(branch, reg, ir, bs, bt);
+            if (!br.has_value()) return br;
+            for (auto s : bs) starts.push_back(s);
+            for (auto t : bt) terminals.push_back(t);
+        }
+        return Unit{};
+    }
+
+    return std::unexpected(PravahaError{ErrorKind::ParseError, "Unknown symbolic expression type"});
+}
+
+} // namespace detail
+
+inline Outcome<TaskIr> lower_symbolic_pipeline(const symbolic::SymbolicPipeline& pipeline, SymbolRegistry& reg) {
+    TaskIr ir;
+    std::vector<TaskId> starts, terminals;
+    auto result = detail::lower_symbolic_expr(pipeline.root, reg, ir, starts, terminals);
+    if (!result.has_value()) return std::unexpected(result.error());
+    return ir;
+}
+
 } // namespace pravaha
 
 // std::hash specializations for LiteGraph Hashable concept
