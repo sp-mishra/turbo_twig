@@ -400,14 +400,16 @@ template <typename T>
 PayloadMeta make_payload_meta_for_type() {
     PayloadMeta pm;
     pm.output_checked = true;
-    pm.output_transferable = std::copy_constructible<T>;
     if constexpr (std::is_trivially_copyable_v<T> && std::is_standard_layout_v<T>) {
         if constexpr (meta::Reflectable<T>) {
+            pm.output_transferable = meta::is_binary_stable<T>();
             pm.output_serializable = meta::is_zero_copy_serializable<T>();
         } else {
+            pm.output_transferable = true;
             pm.output_serializable = true;
         }
     } else {
+        pm.output_transferable = false;
         pm.output_serializable = false;
     }
     pm.output_type_name = std::string(meta::type_name<T>());
@@ -797,7 +799,7 @@ consteval bool pravaha_binary_stable() {
 
 template <class T>
 consteval bool is_transferable() {
-    return std::copy_constructible<T>;
+    return pravaha_binary_stable<T>();
 }
 
 template <class T>
@@ -822,14 +824,16 @@ template <typename T>
 PayloadMeta make_payload_meta() {
     PayloadMeta pm;
     pm.output_checked = true;
-    pm.output_transferable = std::copy_constructible<T>;
     if constexpr (std::is_trivially_copyable_v<T> && std::is_standard_layout_v<T>) {
         if constexpr (meta::Reflectable<T>) {
+            pm.output_transferable = meta::is_binary_stable<T>();
             pm.output_serializable = meta::is_zero_copy_serializable<T>();
         } else {
+            pm.output_transferable = true;
             pm.output_serializable = true;
         }
     } else {
+        pm.output_transferable = false;
         pm.output_serializable = false;
     }
     pm.output_type_name = std::string(meta::type_name<T>());

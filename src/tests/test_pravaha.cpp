@@ -1144,10 +1144,8 @@ TEST_CASE("Domain - External task returning std::string fails", "[pravaha][domai
     pravaha::Runner<> runner;
     auto t = pravaha::task_on(pravaha::ExecutionDomain::External, "ext_string", []() -> std::string { return "fail"; });
     auto result = runner.submit(std::move(t));
-    // std::string is copy_constructible (transferable) so it passes domain check
-    // The requirement says "fails if detectable" - std::string IS transferable so it passes
-    REQUIRE(result.has_value());
-    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::DomainConstraintViolation);
 }
 
 TEST_CASE("Domain - External task returning move-only type fails", "[pravaha][domain]") {
