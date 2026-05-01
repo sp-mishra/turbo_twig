@@ -1017,6 +1017,10 @@ struct SharedSchedulerState {
 
 } // namespace detail
 
+// GraphAlgorithmPolicy owns DAG validation and ordering strategy.
+// Default implementation delegates to LiteGraph/LiteGraphAlgorithms helpers.
+// Alternative policies may add custom cycle checks, incremental validation,
+// or critical-path-aware ordering while keeping Runner unchanged.
 struct DefaultGraphAlgorithmPolicy {
     static Outcome<Unit> validate(const TaskIr& ir) {
         return validate_ir_with_litegraph(ir);
@@ -1030,6 +1034,9 @@ struct DefaultGraphAlgorithmPolicy {
 // Backward-compatible alias during transition to algorithm-policy naming.
 using DefaultGraphValidationPolicy = DefaultGraphAlgorithmPolicy;
 
+// ReadyPolicy owns schedulability checks for each node.
+// Default implementation uses dependency count, cancellation flag, and node
+// state; alternative policies may add priority/resource/domain-aware readiness.
 struct DefaultReadyPolicy {
     template <class RuntimeStateLike>
     static bool is_ready(const RuntimeStateLike& state, std::size_t index) {
@@ -1046,6 +1053,10 @@ struct DefaultReadyPolicy {
     }
 };
 
+// NoProgressPolicy owns deadlock/no-progress handling.
+// Default implementation force-fails unresolved non-terminal nodes and records
+// InternalError; alternative policies may add diagnostics, wait-for analysis,
+// or timeout-based handling.
 struct DefaultNoProgressPolicy {
     template <class SharedSchedulerStateLike>
     static bool handle_no_progress(SharedSchedulerStateLike& sstate) {
