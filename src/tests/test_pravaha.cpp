@@ -1372,6 +1372,25 @@ TEST_CASE("Domain - External task returning Outcome<SimpleStruct> passes", "[pra
 // SECTION 22: Textual Pipeline Parsing (Lithe)
 // ============================================================================
 
+TEST_CASE("pravaha lithe frontend creates token expressions", "[pravaha][parse][lithe]") {
+    auto kw = pravaha::symbolic::lithe_frontend::keyword_expr("pipeline", 0, 8);
+    auto ident = pravaha::symbolic::lithe_frontend::identifier_expr("startup", 9, 16);
+    auto task_ref = pravaha::symbolic::lithe_frontend::task_ref_expr("load_config", 0, 11);
+
+    STATIC_REQUIRE(lithe::Expression<decltype(kw)>);
+    STATIC_REQUIRE(lithe::Expression<decltype(ident)>);
+    STATIC_REQUIRE(lithe::Expression<decltype(task_ref)>);
+
+    const auto dumped = lithe::emit::dump(kw);
+    REQUIRE_FALSE(dumped.empty());
+    REQUIRE(dumped.find("pravaha.keyword") != std::string::npos);
+
+    auto kw2 = pravaha::symbolic::lithe_frontend::keyword_expr("pipeline", 0, 8);
+    const auto h1 = lithe::emit::structural_hash(kw);
+    const auto h2 = lithe::emit::structural_hash(kw2);
+    REQUIRE(h1 == h2);
+}
+
 TEST_CASE("lithe_bridge - keyword exact match", "[pravaha][parse][lithe]") {
     REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("pipeline", "pipeline"));
     REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("pipelineX", "pipeline"));

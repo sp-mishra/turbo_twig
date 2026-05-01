@@ -1291,6 +1291,48 @@ private:
 
 namespace symbolic {
 
+namespace lithe_frontend {
+
+struct pipeline_tag {};
+struct task_ref_tag {};
+struct sequence_tag {};
+struct parallel_tag {};
+struct collect_all_tag {};
+struct keyword_tag {};
+struct identifier_tag {};
+struct token_tag {};
+
+struct TokenCapture {
+    std::string kind;
+    std::string text;
+    std::size_t begin{};
+    std::size_t end{};
+
+    bool operator==(const TokenCapture&) const = default;
+};
+
+inline auto token_expr(TokenCapture capture) {
+    return lithe::make_node<token_tag>(lithe::as_expr(std::move(capture)));
+}
+
+inline auto keyword_expr(std::string text, std::size_t begin, std::size_t end) {
+    return lithe::make_node<keyword_tag>(
+        token_expr(TokenCapture{"keyword", std::move(text), begin, end})
+    );
+}
+
+inline auto identifier_expr(std::string text, std::size_t begin, std::size_t end) {
+    return lithe::make_node<identifier_tag>(
+        token_expr(TokenCapture{"identifier", std::move(text), begin, end})
+    );
+}
+
+inline auto task_ref_expr(std::string name, std::size_t begin, std::size_t end) {
+    return lithe::make_node<task_ref_tag>(identifier_expr(std::move(name), begin, end));
+}
+
+} // namespace lithe_frontend
+
 namespace lithe_bridge {
 
 // v0.1: Lithe owns keyword/token exact matching; identifier character
@@ -1868,3 +1910,61 @@ auto parallel_reduce(
 
 } // namespace pravaha
 
+namespace std {
+
+template<>
+struct hash<pravaha::symbolic::lithe_frontend::TokenCapture> {
+    std::size_t operator()(const pravaha::symbolic::lithe_frontend::TokenCapture& tok) const noexcept {
+        std::size_t h = std::hash<std::string>{}(tok.kind);
+        h ^= (std::hash<std::string>{}(tok.text) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+        h ^= (std::hash<std::size_t>{}(tok.begin) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+        h ^= (std::hash<std::size_t>{}(tok.end) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+        return h;
+    }
+};
+
+} // namespace std
+
+namespace lithe::emit {
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::pipeline_tag> {
+    static constexpr const char* value = "pravaha.pipeline";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::task_ref_tag> {
+    static constexpr const char* value = "pravaha.task_ref";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::sequence_tag> {
+    static constexpr const char* value = "pravaha.sequence";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::parallel_tag> {
+    static constexpr const char* value = "pravaha.parallel";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::collect_all_tag> {
+    static constexpr const char* value = "pravaha.collect_all";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::keyword_tag> {
+    static constexpr const char* value = "pravaha.keyword";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::identifier_tag> {
+    static constexpr const char* value = "pravaha.identifier";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::token_tag> {
+    static constexpr const char* value = "pravaha.token";
+};
+
+} // namespace lithe::emit
