@@ -1007,7 +1007,6 @@ TEST_CASE("JThreadBackend - destructor does not deadlock", "[pravaha][jthread]")
 }
 
 TEST_CASE("JThreadBackend - no graph logic in backend", "[pravaha][jthread]") {
-    // Backend only knows about TaskCommand, not TaskIr or graph topology
     std::atomic<int> val{0};
     {
         pravaha::JThreadBackend backend(1);
@@ -1016,4 +1015,105 @@ TEST_CASE("JThreadBackend - no graph logic in backend", "[pravaha][jthread]") {
         backend.drain();
     }
     REQUIRE(val.load() == 42);
+}
+
+// ============================================================================
+// SECTION 20: Runner with JThreadBackend
+// ============================================================================
+
+TEST_CASE("Runner<JThreadBackend> - sequence works", "[pravaha][jthread][runner]") {
+    std::atomic<int> order_a{0}, order_b{0};
+    std::atomic<int> seq{0};
+    pravaha::JThreadBackend backend(2);
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+    auto a = pravaha::task("A", [&]() { order_a.store(seq.fetch_add(1)); });
+    auto b = pravaha::task("B", [&]() { order_b.store(seq.fetch_add(1)); });
+    auto expr = std::move(a) | std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(order_a.load() < order_b.load());
+}
+
+TEST_CASE("Runner<JThreadBackend> - parallel independent tasks run", "[pravaha][jthread][runner]") {
+    std::atomic<int> counter{0};
+    pravaha::JThreadBackend backend(4);
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+    auto a = pravaha::task("A", [&counter]() { counter.fetch_add(1); });
+    auto b = pravaha::task("B", [&counter]() { counter.fetch_add(1); });
+    auto expr = std::move(a) & std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(counter.load() == 2);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner<JThreadBackend> - (A & B) | C waits for both", "[pravaha][jthread][runner]") {
+    std::atomic<int> a_done{0}, b_done{0}, c_start{0};
+    pravaha::JThreadBackend backend(4);
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+    auto a = pravaha::task("A", [&]() { a_done.store(1); });
+    auto b = pravaha::task("B", [&]() { b_done.store(1); });
+    auto c = pravaha::task("C", [&]() { c_start.store(a_done.load() + b_done.load()); });
+    auto expr = (std::move(a) & std::move(b)) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(c_start.load() == 2);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner<JThreadBackend> - failure skips downstream", "[pravaha][jthread][runner]") {
+    std::atomic<int> c_ran{0};
+    pravaha::JThreadBackend backend(2);
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+    auto a = pravaha::task("A", []() { throw std::runtime_error("fail"); });
+    auto b = pravaha::task("B", [&c_ran]() { ++c_ran; });
+    auto expr = std::move(a) | std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(c_ran.load() == 0);
+    REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+    REQUIRE(result.value().node_states[1] == pravaha::TaskState::Skipped);
+}
+
+TEST_CASE("Runner<JThreadBackend> - no deadlocks on repeated runs", "[pravaha][jthread][runner]") {
+    pravaha::JThreadBackend backend(2);
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+    for (int run = 0; run < 5; ++run) {
+        std::atomic<int> counter{0};
+        auto a = pravaha::task("A", [&counter]() { counter.fetch_add(1); });
+        auto b = pravaha::task("B", [&counter]() { counter.fetch_add(1); });
+        auto expr = std::move(a) & std::move(b);
+        auto result = runner.submit(std::move(expr));
+        REQUIRE(result.has_value());
+        REQUIRE(counter.load() == 2);
+        REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+    }
+}
+
+TEST_CASE("Runner<JThreadBackend> - repeated runs do not share stale state", "[pravaha][jthread][runner]") {
+    pravaha::JThreadBackend backend(2);
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+
+    // First run: succeed
+    {
+        auto a = pravaha::task("A", []() {});
+        auto result = runner.submit(std::move(a));
+        REQUIRE(result.has_value());
+        REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+    }
+    // Second run: fail
+    {
+        auto a = pravaha::task("A", []() { throw std::runtime_error("fail"); });
+        auto result = runner.submit(std::move(a));
+        REQUIRE(result.has_value());
+        REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
+    }
+    // Third run: succeed again
+    {
+        auto a = pravaha::task("A", []() {});
+        auto result = runner.submit(std::move(a));
+        REQUIRE(result.has_value());
+        REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+    }
 }

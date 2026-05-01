@@ -593,11 +593,10 @@ class InlineBackend {
 public:
     InlineBackend() = default;
 
-    Outcome<Unit> submit(TaskCommand& cmd) noexcept {
-        if (stop_requested_) {
-            return std::unexpected(PravahaError{ErrorKind::TaskCanceled, "Backend stop requested"});
+    void submit(TaskCommand cmd) noexcept {
+        if (!stop_requested_) {
+            cmd.run();
         }
-        return cmd.run();
     }
 
     void drain() noexcept {}
@@ -688,13 +687,39 @@ public:
     [[nodiscard]] std::size_t worker_count() const noexcept { return workers_.size(); }
 };
 
+namespace detail {
+
+struct SharedSchedulerState {
+    RuntimeState rt;
+    std::mutex mutex;
+    std::condition_variable cv_done;
+    std::size_t total_nodes{0};
+    std::size_t terminal_count{0};
+
+    [[nodiscard]] bool all_terminal() const { return terminal_count >= total_nodes; }
+
+    static bool is_terminal(TaskState s) {
+        return s == TaskState::Succeeded || s == TaskState::Failed ||
+               s == TaskState::Skipped || s == TaskState::Canceled;
+    }
+
+    void count_terminals() {
+        terminal_count = 0;
+        for (auto s : rt.node_states)
+            if (is_terminal(s)) ++terminal_count;
+    }
+};
+
+} // namespace detail
+
 template <typename Backend = InlineBackend>
 class Runner {
-    Backend backend_;
+    Backend* backend_{nullptr};
+    Backend owned_backend_;
 
 public:
-    Runner() = default;
-    explicit Runner(Backend b) : backend_{std::move(b)} {}
+    Runner() : owned_backend_{}, backend_{&owned_backend_} {}
+    explicit Runner(Backend& b) : backend_{&b} {}
 
     template <IsPravahaExpr Expr>
     Outcome<RunResult> submit(Expr&& expr) {
@@ -708,37 +733,90 @@ public:
         return execute(ir);
     }
 
-    void request_stop() noexcept { backend_.request_stop(); }
+    void request_stop() noexcept { backend_->request_stop(); }
 
 private:
     Outcome<RunResult> execute(TaskIr& ir) {
-        auto state = RuntimeState::build(ir);
+        auto sstate = std::make_shared<detail::SharedSchedulerState>();
+        sstate->rt = RuntimeState::build(ir);
+        sstate->total_nodes = ir.nodes.size();
+        sstate->count_terminals();
 
-        while (state.has_ready()) {
-            auto idx = state.next_ready();
-            if (idx >= ir.nodes.size()) break;
+        // Submit initially ready nodes
+        schedule_ready(ir, sstate);
 
-            if (backend_.stopped()) {
-                state.node_states[idx] = TaskState::Canceled;
-                state.canceled = true;
-                continue;
-            }
-
-            state.node_states[idx] = TaskState::Scheduled;
-            state.node_states[idx] = TaskState::Running;
-
-            auto cmd_result = backend_.submit(ir.nodes[idx].command);
-
-            if (cmd_result.has_value()) {
-                state.mark_succeeded(idx);
-            } else {
-                state.mark_failed(idx, std::move(cmd_result.error()));
-            }
+        // Wait for all nodes to reach terminal state
+        {
+            std::unique_lock lock(sstate->mutex);
+            sstate->cv_done.wait(lock, [&]() { return sstate->all_terminal(); });
         }
 
-        return state.finalize();
+        return sstate->rt.finalize();
+    }
+
+    void schedule_ready(TaskIr& ir, std::shared_ptr<detail::SharedSchedulerState>& sstate) {
+        // Collect ready indices under lock
+        std::vector<std::size_t> ready_indices;
+        {
+            std::lock_guard lock(sstate->mutex);
+            for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
+                if (sstate->rt.node_states[i] == TaskState::Ready) {
+                    sstate->rt.node_states[i] = TaskState::Scheduled;
+                    ready_indices.push_back(i);
+                }
+            }
+            sstate->count_terminals();
+        }
+
+        for (auto idx : ready_indices) {
+            submit_node(ir, idx, sstate);
+        }
+    }
+
+    void submit_node(TaskIr& ir, std::size_t idx, std::shared_ptr<detail::SharedSchedulerState> sstate) {
+        // Wrap the node execution in a TaskCommand that calls back into scheduler
+        auto* node_cmd_ptr = &ir.nodes[idx].command;
+        auto* ir_ptr = &ir;
+        auto wrapped = TaskCommand::make([this, idx, node_cmd_ptr, ir_ptr, sstate]() mutable {
+            // Run the actual node command
+            auto result = node_cmd_ptr->run();
+
+            // Update scheduler state
+            std::vector<std::size_t> newly_ready;
+            {
+                std::lock_guard lock(sstate->mutex);
+                if (result.has_value()) {
+                    sstate->rt.mark_succeeded(idx);
+                } else {
+                    sstate->rt.mark_failed(idx, std::move(result.error()));
+                }
+                sstate->count_terminals();
+
+                // Collect newly ready nodes
+                for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
+                    if (sstate->rt.node_states[i] == TaskState::Ready) {
+                        sstate->rt.node_states[i] = TaskState::Scheduled;
+                        newly_ready.push_back(i);
+                    }
+                }
+                sstate->count_terminals();
+            }
+
+            // Submit newly ready nodes
+            for (auto nidx : newly_ready) {
+                submit_node(*ir_ptr, nidx, sstate);
+            }
+
+            // Notify if all done
+            sstate->cv_done.notify_all();
+        });
+
+        backend_->submit(std::move(wrapped));
     }
 };
+
+// Specialization behavior: InlineBackend submit returns Outcome, JThreadBackend submit is void.
+// We need the Runner to work with both. The wrapped TaskCommand handles everything internally.
 
 } // namespace pravaha
 
