@@ -1285,6 +1285,19 @@ TEST_CASE("lithe_bridge - parse_pipeline_header rejects reserved name", "[pravah
     REQUIRE(header.error().kind == pravaha::ErrorKind::ParseError);
 }
 
+TEST_CASE("lithe_bridge - parse_parallel_intro success", "[pravaha][parse][lithe]") {
+    constexpr std::string_view src = "parallel { a, b }";
+    auto result = pravaha::symbolic::lithe_bridge::parse_parallel_intro(src, 0);
+    REQUIRE(result.has_value());
+    REQUIRE(result.value() == src.find('{') + 1);
+}
+
+TEST_CASE("lithe_bridge - parse_parallel_intro rejects bad keyword", "[pravaha][parse][lithe]") {
+    auto result = pravaha::symbolic::lithe_bridge::parse_parallel_intro("parallelx { a, b }", 0);
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+}
+
 TEST_CASE("parse_pipeline - simple sequence", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then b then c }");
     REQUIRE(result.has_value());
@@ -1295,6 +1308,18 @@ TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
     REQUIRE(result.has_value());
     REQUIRE(result.value().name == "p");
+}
+
+TEST_CASE("parse_pipeline - parallel intro via lithe bridge works", "[pravaha][parse][lithe]") {
+    auto result = pravaha::parse_pipeline("pipeline p { parallel { a, b } }");
+    REQUIRE(result.has_value());
+    REQUIRE(result.value().name == "p");
+}
+
+TEST_CASE("parse_pipeline - parallelx intro is rejected", "[pravaha][parse][lithe]") {
+    auto result = pravaha::parse_pipeline("pipeline p { parallelx { a, b } }");
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
 }
 
 TEST_CASE("parse_pipeline - does not execute tasks", "[pravaha][parse]") {

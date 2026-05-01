@@ -1262,6 +1262,39 @@ inline Outcome<PipelineHeaderParse> parse_pipeline_header(std::string_view text)
     return PipelineHeaderParse{std::string(name_tok), pos, brace};
 }
 
+inline Outcome<std::size_t> parse_parallel_intro(std::string_view text, std::size_t offset) {
+    std::size_t pos = offset;
+    auto skip_ws = [&]() {
+        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
+    };
+
+    auto read_token = [&]() -> std::string_view {
+        skip_ws();
+        if (pos >= text.size()) return {};
+        std::size_t start = pos;
+        while (pos < text.size() && !std::isspace(static_cast<unsigned char>(text[pos]))
+               && text[pos] != '{' && text[pos] != '}' && text[pos] != ',') {
+            ++pos;
+        }
+        return text.substr(start, pos - start);
+    };
+
+    auto kw = read_token();
+    if (!is_parallel_keyword(kw)) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected 'parallel' keyword"});
+    }
+
+    skip_ws();
+    if (pos >= text.size() || text[pos] != '{') {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '{' after parallel"});
+    }
+
+    ++pos;
+    return pos;
+}
+
 } // namespace lithe_bridge
 
 struct SymbolicTaskExpr { std::string name; };
@@ -1328,7 +1361,6 @@ struct Parser {
     }
 
     Outcome<SymbolicExpr> parse_parallel() {
-        if (!expect("{")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '{' after 'parallel'"});
         std::vector<SymbolicExpr> branches;
         while (true) {
             skip_ws();
@@ -1354,7 +1386,9 @@ struct Parser {
         skip_ws();
         auto tok = peek_token();
         if (lithe_bridge::is_parallel_keyword(tok)) {
-            consume_token();
+            auto intro = lithe_bridge::parse_parallel_intro(src, pos);
+            if (!intro.has_value()) return std::unexpected(intro.error());
+            pos = intro.value();
             return parse_parallel();
         }
         if (!is_valid_identifier(tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected identifier, got: " + std::string(tok)});
