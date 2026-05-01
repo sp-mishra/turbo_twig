@@ -983,6 +983,8 @@ struct SharedSchedulerState {
     std::condition_variable cv_done;
     std::size_t total_nodes{0};
     std::size_t terminal_count{0};
+    std::size_t completed_count{0};
+    std::size_t scheduled_last_pass{0};
 
     [[nodiscard]] bool all_terminal() const { return terminal_count >= total_nodes; }
 
@@ -995,6 +997,21 @@ struct SharedSchedulerState {
         terminal_count = 0;
         for (auto s : rt.node_states)
             if (is_terminal(s)) ++terminal_count;
+        completed_count = terminal_count;
+    }
+
+    void note_scheduled_in_last_pass(std::size_t count) {
+        scheduled_last_pass = count;
+    }
+
+    [[nodiscard]] std::size_t active_count() const {
+        std::size_t active = 0;
+        for (auto s : rt.node_states) {
+            if (s == TaskState::Scheduled || s == TaskState::Running) {
+                ++active;
+            }
+        }
+        return active;
     }
 };
 
@@ -1026,22 +1043,19 @@ struct DefaultReadyPolicy {
 struct DefaultNoProgressPolicy {
     template <class SharedSchedulerStateLike>
     static bool handle_no_progress(SharedSchedulerStateLike& sstate) {
-        if (sstate.all_terminal()) return false;
+        if (sstate.completed_count >= sstate.total_nodes) return false;
+        if (sstate.active_count() > 0) return false;
+        if (sstate.scheduled_last_pass > 0) return false;
 
-        bool has_live_work = false;
-        for (auto s : sstate.rt.node_states) {
-            if (s == TaskState::Ready || s == TaskState::Scheduled || s == TaskState::Running) {
-                has_live_work = true;
-                break;
-            }
-        }
-        if (has_live_work) return false;
-
+        bool changed = false;
         for (auto& s : sstate.rt.node_states) {
             if (!SharedSchedulerStateLike::is_terminal(s)) {
                 s = TaskState::Failed;
+                changed = true;
             }
         }
+        if (!changed) return false;
+
         sstate.rt.errors.push_back(PravahaError{
             ErrorKind::InternalError,
             "scheduler made no progress; unresolved non-terminal nodes remain"
@@ -1095,11 +1109,14 @@ private:
         schedule_ready(ir, sstate);
 
         // Deadlock guard: no terminal completion possible if scheduler has no live work.
+        bool no_progress_forced = false;
         {
             std::lock_guard lock(sstate->mutex);
-            NoProgressPolicy::handle_no_progress(*sstate);
+            no_progress_forced = NoProgressPolicy::handle_no_progress(*sstate);
         }
-        sstate->cv_done.notify_all();
+        if (no_progress_forced) {
+            sstate->cv_done.notify_all();
+        }
 
         // Wait for all nodes to reach terminal state
         {
@@ -1121,6 +1138,7 @@ private:
                     ready_indices.push_back(i);
                 }
             }
+            sstate->note_scheduled_in_last_pass(ready_indices.size());
             sstate->count_terminals();
         }
 
@@ -1139,6 +1157,7 @@ private:
 
             // Update scheduler state
             std::vector<std::size_t> newly_ready;
+            bool no_progress_forced = false;
             {
                 std::lock_guard lock(sstate->mutex);
                 if (result.has_value()) {
@@ -1155,10 +1174,11 @@ private:
                         newly_ready.push_back(i);
                     }
                 }
+                sstate->note_scheduled_in_last_pass(newly_ready.size());
                 sstate->count_terminals();
 
                 // Deadlock guard after completion scheduling pass.
-                NoProgressPolicy::handle_no_progress(*sstate);
+                no_progress_forced = NoProgressPolicy::handle_no_progress(*sstate);
             }
 
             // Submit newly ready nodes
@@ -1167,6 +1187,9 @@ private:
             }
 
             // Notify if all done
+            if (no_progress_forced) {
+                sstate->cv_done.notify_all();
+            }
             sstate->cv_done.notify_all();
         });
 
