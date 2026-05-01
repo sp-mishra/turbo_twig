@@ -1745,6 +1745,22 @@ inline bool is_valid_identifier(std::string_view token) {
     return lithe_bridge::identifier_matches(token);
 }
 
+inline Outcome<Unit> validate_task_identifier(std::string_view token) {
+    if (lithe_frontend::is_reserved_keyword(token)) {
+        return std::unexpected(PravahaError{
+            ErrorKind::ParseError,
+            "reserved keyword cannot be used as task identifier: " + std::string(token)
+        });
+    }
+    if (!lithe_frontend::identifier_matches(token)) {
+        return std::unexpected(PravahaError{
+            ErrorKind::ParseError,
+            "invalid identifier: " + std::string(token)
+        });
+    }
+    return Unit{};
+}
+
 namespace detail {
 
 struct Parser {
@@ -1793,7 +1809,8 @@ struct Parser {
                 else return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected ',' between parallel branches"});
                 tok = peek_token();
             }
-            if (!is_valid_identifier(tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Invalid identifier in parallel: " + std::string(tok)});
+            auto id_ok = validate_task_identifier(tok);
+            if (!id_ok.has_value()) return std::unexpected(id_ok.error());
             auto consumed = consume_token();
             const std::size_t end = pos;
             const std::size_t begin = end - consumed.size();
@@ -1814,13 +1831,19 @@ struct Parser {
     Outcome<SymbolicExpr> parse_step() {
         skip_ws();
         auto tok = peek_token();
-        if (lithe_bridge::is_parallel_keyword(tok)) {
-            auto intro = lithe_bridge::parse_parallel_intro(src, pos);
-            if (!intro.has_value()) return std::unexpected(intro.error());
-            pos = intro.value();
+        if (lithe_frontend::is_parallel_keyword(tok)) {
+            auto intro = lithe_frontend::parse_parallel_intro(src, pos);
+            if (!intro.has_value()) {
+                return std::unexpected(PravahaError{
+                    ErrorKind::ParseError,
+                    "reserved keyword cannot be used as task identifier: parallel"
+                });
+            }
+            pos = intro->body_start_offset;
             return parse_parallel();
         }
-        if (!is_valid_identifier(tok)) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected identifier, got: " + std::string(tok)});
+        auto id_ok = validate_task_identifier(tok);
+        if (!id_ok.has_value()) return std::unexpected(id_ok.error());
         auto consumed = consume_token();
         const std::size_t end = pos;
         const std::size_t begin = end - consumed.size();

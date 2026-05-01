@@ -1636,6 +1636,48 @@ TEST_CASE("parse_pipeline uses lithe frontend header", "[pravaha][parse][lithe]"
     }
 }
 
+TEST_CASE("parse_pipeline validates task identifiers via lithe frontend", "[pravaha][parse][lithe]") {
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { a }");
+        REQUIRE(result.has_value());
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { load_config then start_cache }");
+        REQUIRE(result.has_value());
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { 1task }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(result.error().message.find("identifier") != std::string::npos);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { task-name }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(result.error().message.find("identifier") != std::string::npos);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { then }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(result.error().message.find("reserved") != std::string::npos);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { parallel }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(result.error().message.find("reserved") != std::string::npos);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { collect_all }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(result.error().message.find("reserved") != std::string::npos);
+    }
+}
+
 TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
     REQUIRE(result.has_value());
