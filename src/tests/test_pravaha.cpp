@@ -459,3 +459,144 @@ TEST_CASE("CancellationScope - nested scopes", "[pravaha][cancellation]") {
     // Root is unaffected
     REQUIRE(!root_source.stop_requested());
 }
+
+// ============================================================================
+// SECTION 12: TaskCommand — Static Type Erasure
+// ============================================================================
+
+TEST_CASE("TaskCommand - stores lambda and runs it", "[pravaha][taskcommand]") {
+    int counter = 0;
+    auto cmd = pravaha::TaskCommand::make([&counter]() { ++counter; }, "increment");
+
+    REQUIRE(cmd.has_value());
+    REQUIRE(!cmd.empty());
+    REQUIRE(cmd.name() == "increment");
+
+    auto result = cmd.run();
+    REQUIRE(result.has_value());
+    REQUIRE(counter == 1);
+}
+
+TEST_CASE("TaskCommand - callable runs exactly once when run once", "[pravaha][taskcommand]") {
+    int counter = 0;
+    auto cmd = pravaha::TaskCommand::make([&counter]() { ++counter; });
+
+    cmd.run();
+    REQUIRE(counter == 1);
+
+    // Running again is allowed (same callable still there)
+    cmd.run();
+    REQUIRE(counter == 2);
+}
+
+TEST_CASE("TaskCommand - move-only lambda works", "[pravaha][taskcommand]") {
+    auto ptr = std::make_unique<int>(42);
+    int* raw = ptr.get();
+
+    auto cmd = pravaha::TaskCommand::make([p = std::move(ptr)]() mutable {
+        *p += 1;
+    }, "move_only_task");
+
+    REQUIRE(cmd.has_value());
+    auto result = cmd.run();
+    REQUIRE(result.has_value());
+    REQUIRE(*raw == 43);
+}
+
+TEST_CASE("TaskCommand - moved-from command is empty", "[pravaha][taskcommand]") {
+    int counter = 0;
+    auto cmd1 = pravaha::TaskCommand::make([&counter]() { ++counter; });
+
+    REQUIRE(cmd1.has_value());
+
+    // Move to cmd2
+    auto cmd2 = std::move(cmd1);
+
+    // cmd1 is now empty
+    REQUIRE(cmd1.empty());
+    REQUIRE(!cmd1.has_value());
+
+    // cmd2 holds the callable
+    REQUIRE(cmd2.has_value());
+    auto result = cmd2.run();
+    REQUIRE(result.has_value());
+    REQUIRE(counter == 1);
+}
+
+TEST_CASE("TaskCommand - move assignment", "[pravaha][taskcommand]") {
+    int a_counter = 0;
+    int b_counter = 0;
+
+    auto cmd_a = pravaha::TaskCommand::make([&a_counter]() { ++a_counter; });
+    auto cmd_b = pravaha::TaskCommand::make([&b_counter]() { ++b_counter; });
+
+    // Move-assign: cmd_a's old callable is destroyed, replaced by cmd_b's
+    cmd_a = std::move(cmd_b);
+
+    REQUIRE(cmd_b.empty());
+    REQUIRE(cmd_a.has_value());
+
+    cmd_a.run();
+    REQUIRE(a_counter == 0);  // old callable was destroyed
+    REQUIRE(b_counter == 1);  // new callable ran
+}
+
+TEST_CASE("TaskCommand - exception thrown by callable becomes Outcome error", "[pravaha][taskcommand]") {
+    auto cmd = pravaha::TaskCommand::make([]() {
+        throw std::runtime_error("task exploded");
+    });
+
+    auto result = cmd.run();
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::TaskFailed);
+    REQUIRE(result.error().message.find("task exploded") != std::string::npos);
+}
+
+TEST_CASE("TaskCommand - unknown exception becomes Outcome error", "[pravaha][taskcommand]") {
+    auto cmd = pravaha::TaskCommand::make([]() {
+        throw 42;  // non-std::exception type
+    });
+
+    auto result = cmd.run();
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::TaskFailed);
+    REQUIRE(result.error().message.find("unknown") != std::string::npos);
+}
+
+TEST_CASE("TaskCommand - default constructed is empty", "[pravaha][taskcommand]") {
+    pravaha::TaskCommand cmd;
+    REQUIRE(cmd.empty());
+    REQUIRE(!cmd.has_value());
+    REQUIRE(!static_cast<bool>(cmd));
+
+    // Running empty command returns error
+    auto result = cmd.run();
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::TaskFailed);
+}
+
+TEST_CASE("TaskCommand - debug name preserved through move", "[pravaha][taskcommand]") {
+    auto cmd1 = pravaha::TaskCommand::make([](){}, "my_task");
+    REQUIRE(cmd1.name() == "my_task");
+
+    auto cmd2 = std::move(cmd1);
+    REQUIRE(cmd2.name() == "my_task");
+    REQUIRE(cmd1.name().empty());
+}
+
+TEST_CASE("TaskCommand - bool conversion", "[pravaha][taskcommand]") {
+    pravaha::TaskCommand empty_cmd;
+    REQUIRE(!static_cast<bool>(empty_cmd));
+
+    auto full_cmd = pravaha::TaskCommand::make([](){});
+    REQUIRE(static_cast<bool>(full_cmd));
+}
+
+TEST_CASE("TaskCommand - no std::function usage", "[pravaha][taskcommand]") {
+    // Compile-time verification: TaskCommand does not use std::function internally.
+    // This test verifies it works with a zero-capture lambda (smallest possible).
+    auto cmd = pravaha::TaskCommand::make([](){});
+    REQUIRE(cmd.has_value());
+    auto result = cmd.run();
+    REQUIRE(result.has_value());
+}

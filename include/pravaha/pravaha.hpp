@@ -9,12 +9,16 @@
 #include <atomic>
 #include <concepts>
 #include <cstddef>
+#include <cstring>
+#include <exception>
 #include <expected>
 #include <memory>
+#include <new>
 #include <source_location>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 // Project dependencies
@@ -328,6 +332,191 @@ public:
     // Request cancellation on the local source. Idempotent.
     void request_stop() noexcept {
         local_source_.request_stop();
+    }
+};
+
+// ============================================================================
+//  SECTION 5: TASK COMMAND — STATIC TYPE ERASURE
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// 5.1 TaskCommand — move-only, statically-erased callable for backend queues
+// ---------------------------------------------------------------------------
+// TaskCommand is the only erased execution object allowed into backend queues.
+// It uses manual static type erasure with inline storage (no heap, no virtual).
+// The callable must be invocable with no arguments and move-constructible.
+class TaskCommand {
+    // Inline storage configuration
+    static constexpr std::size_t buffer_size  = 128;
+    static constexpr std::size_t buffer_align = alignof(std::max_align_t);
+
+    // Function pointer types for the vtable-free dispatch
+    using invoke_fn_t  = Outcome<Unit>(*)(void* storage) noexcept;
+    using move_fn_t    = void(*)(void* dst, void* src) noexcept;
+    using destroy_fn_t = void(*)(void* storage) noexcept;
+
+    // Aligned inline storage
+    alignas(buffer_align) unsigned char storage_[buffer_size]{};
+
+    // Function pointers (null when empty)
+    invoke_fn_t  invoke_fn_{nullptr};
+    move_fn_t    move_fn_{nullptr};
+    destroy_fn_t destroy_fn_{nullptr};
+
+    // Optional debug name
+    std::string_view debug_name_{};
+
+    // ---------------------------------------------------------------------------
+    // Static dispatch implementations for a concrete type F
+    // ---------------------------------------------------------------------------
+    template <typename F>
+    static Outcome<Unit> invoke_impl(void* storage) noexcept {
+        try {
+            F& fn = *std::launder(reinterpret_cast<F*>(storage));
+            fn();
+            return Unit{};
+        } catch (const std::exception& e) {
+            return std::unexpected(PravahaError{
+                ErrorKind::TaskFailed,
+                std::string{"TaskCommand exception: "} + e.what()
+            });
+        } catch (...) {
+            return std::unexpected(PravahaError{
+                ErrorKind::TaskFailed,
+                "TaskCommand: unknown exception"
+            });
+        }
+    }
+
+    template <typename F>
+    static void move_impl(void* dst, void* src) noexcept {
+        F& src_fn = *std::launder(reinterpret_cast<F*>(src));
+        ::new (dst) F(std::move(src_fn));
+        src_fn.~F();
+    }
+
+    template <typename F>
+    static void destroy_impl(void* storage) noexcept {
+        F& fn = *std::launder(reinterpret_cast<F*>(storage));
+        fn.~F();
+    }
+
+    // Destroy current callable if present
+    void destroy_current() noexcept {
+        if (destroy_fn_) {
+            destroy_fn_(storage_);
+            invoke_fn_  = nullptr;
+            move_fn_    = nullptr;
+            destroy_fn_ = nullptr;
+        }
+    }
+
+public:
+    // Default: empty command
+    TaskCommand() noexcept = default;
+
+    // Not copyable
+    TaskCommand(const TaskCommand&) = delete;
+    TaskCommand& operator=(const TaskCommand&) = delete;
+
+    // Move constructor: transfer callable from other
+    TaskCommand(TaskCommand&& other) noexcept
+        : invoke_fn_{other.invoke_fn_}
+        , move_fn_{other.move_fn_}
+        , destroy_fn_{other.destroy_fn_}
+        , debug_name_{other.debug_name_}
+    {
+        if (move_fn_) {
+            move_fn_(storage_, other.storage_);
+            other.invoke_fn_  = nullptr;
+            other.move_fn_    = nullptr;
+            other.destroy_fn_ = nullptr;
+            other.debug_name_ = {};
+        }
+    }
+
+    // Move assignment: destroy old, transfer new
+    TaskCommand& operator=(TaskCommand&& other) noexcept {
+        if (this != &other) {
+            destroy_current();
+            invoke_fn_  = other.invoke_fn_;
+            move_fn_    = other.move_fn_;
+            destroy_fn_ = other.destroy_fn_;
+            debug_name_ = other.debug_name_;
+            if (move_fn_) {
+                move_fn_(storage_, other.storage_);
+                other.invoke_fn_  = nullptr;
+                other.move_fn_    = nullptr;
+                other.destroy_fn_ = nullptr;
+                other.debug_name_ = {};
+            }
+        }
+        return *this;
+    }
+
+    // Destructor: destroy callable if present
+    ~TaskCommand() noexcept {
+        destroy_current();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Static factory
+    // ---------------------------------------------------------------------------
+    template <typename F>
+        requires std::move_constructible<std::decay_t<F>> &&
+                 std::invocable<std::decay_t<F>>
+    static TaskCommand make(F&& f, std::string_view debug_name = {}) {
+        using Stored = std::decay_t<F>;
+        static_assert(sizeof(Stored) <= buffer_size,
+            "TaskCommand: callable exceeds inline storage capacity (128 bytes). "
+            "Reduce capture size or use indirection.");
+        static_assert(alignof(Stored) <= buffer_align,
+            "TaskCommand: callable alignment exceeds buffer alignment.");
+
+        TaskCommand cmd;
+        ::new (cmd.storage_) Stored(std::forward<F>(f));
+        cmd.invoke_fn_  = &invoke_impl<Stored>;
+        cmd.move_fn_    = &move_impl<Stored>;
+        cmd.destroy_fn_ = &destroy_impl<Stored>;
+        cmd.debug_name_ = debug_name;
+        return cmd;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Execution
+    // ---------------------------------------------------------------------------
+    // Invoke the stored callable. Returns error if command is empty.
+    Outcome<Unit> run() noexcept {
+        if (!invoke_fn_) {
+            return std::unexpected(PravahaError{
+                ErrorKind::TaskFailed,
+                "TaskCommand::run() called on empty command"
+            });
+        }
+        return invoke_fn_(storage_);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Queries
+    // ---------------------------------------------------------------------------
+    // Check if this command holds a callable
+    [[nodiscard]] bool has_value() const noexcept {
+        return invoke_fn_ != nullptr;
+    }
+
+    // Check if this command is empty (moved-from or default)
+    [[nodiscard]] bool empty() const noexcept {
+        return invoke_fn_ == nullptr;
+    }
+
+    // Get the debug name (empty string_view if not set)
+    [[nodiscard]] std::string_view name() const noexcept {
+        return debug_name_;
+    }
+
+    // Explicit bool conversion
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return has_value();
     }
 };
 
