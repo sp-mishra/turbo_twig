@@ -1708,6 +1708,29 @@ TEST_CASE("parse_pipeline uses lithe frontend parallel intro", "[pravaha][parse]
     }
 }
 
+TEST_CASE("parse_pipeline builds stable lithe frontend signature for full symbolic shape", "[pravaha][parse][lithe]") {
+    auto seq_ab_1 = pravaha::parse_pipeline("pipeline p { a then b }");
+    auto seq_ab_2 = pravaha::parse_pipeline("pipeline p { a then b }");
+    auto seq_ba = pravaha::parse_pipeline("pipeline p { b then a }");
+    auto par_ab = pravaha::parse_pipeline("pipeline p { parallel { a, b } }");
+
+    REQUIRE(seq_ab_1.has_value());
+    REQUIRE(seq_ab_2.has_value());
+    REQUIRE(seq_ba.has_value());
+    REQUIRE(par_ab.has_value());
+
+    const auto seq_meta_1 = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ab_1->root);
+    const auto seq_meta_2 = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ab_2->root);
+    const auto seq_meta_ba = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ba->root);
+    const auto par_meta = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(par_ab->root);
+
+    REQUIRE(seq_meta_1.hash != 0);
+    REQUIRE_FALSE(seq_meta_1.dump.empty());
+    REQUIRE(seq_meta_1.hash == seq_meta_2.hash);
+    REQUIRE(seq_meta_1.hash != seq_meta_ba.hash);
+    REQUIRE(seq_meta_1.hash != par_meta.hash);
+}
+
 TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
     REQUIRE(result.has_value());
