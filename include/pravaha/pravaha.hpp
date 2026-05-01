@@ -1311,8 +1311,44 @@ struct TokenCapture {
     bool operator==(const TokenCapture&) const = default;
 };
 
+} // namespace lithe_frontend
+
+} // namespace symbolic
+
+} // namespace pravaha
+
+namespace std {
+
+template<>
+struct hash<pravaha::symbolic::lithe_frontend::TokenCapture> {
+    std::size_t operator()(const pravaha::symbolic::lithe_frontend::TokenCapture& tok) const noexcept {
+        std::size_t h = std::hash<std::string>{}(tok.kind);
+        h ^= (std::hash<std::string>{}(tok.text) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+        h ^= (std::hash<std::size_t>{}(tok.begin) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+        h ^= (std::hash<std::size_t>{}(tok.end) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+        return h;
+    }
+};
+
+} // namespace std
+
+namespace pravaha {
+
+namespace symbolic {
+
+namespace lithe_frontend {
+
 struct CapturedToken {
     TokenCapture capture;
+    std::string lithe_dump;
+    std::size_t lithe_hash{};
+};
+
+struct PipelineHeaderParse {
+    std::string name;
+    std::size_t body_start_offset{};
+    CapturedToken pipeline_keyword;
+    CapturedToken pipeline_name;
     std::string lithe_dump;
     std::size_t lithe_hash{};
 };
@@ -1442,6 +1478,71 @@ inline Outcome<CapturedToken> capture_identifier(
     captured.lithe_dump = lithe::emit::dump(expr);
     captured.lithe_hash = lithe::emit::structural_hash(expr);
     return captured;
+}
+
+inline Outcome<PipelineHeaderParse> parse_pipeline_header(std::string_view text) {
+    std::size_t pos = 0;
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+
+    auto kw = capture_keyword(text, pos, "pipeline", "pipeline_keyword");
+    if (!kw.has_value()) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'pipeline'"});
+    }
+
+    pos = kw->capture.end;
+    if (pos >= text.size() || !std::isspace(static_cast<unsigned char>(text[pos]))) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected pipeline name"});
+    }
+
+    std::size_t name_scan = pos;
+    while (name_scan < text.size() && std::isspace(static_cast<unsigned char>(text[name_scan]))) {
+        ++name_scan;
+    }
+    if (name_scan >= text.size()) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected pipeline name"});
+    }
+
+    std::size_t token_end = name_scan;
+    while (token_end < text.size() && !std::isspace(static_cast<unsigned char>(text[token_end]))
+           && text[token_end] != '{' && text[token_end] != '}' && text[token_end] != ',') {
+        ++token_end;
+    }
+    const auto name_tok = text.substr(name_scan, token_end - name_scan);
+    if (is_reserved_keyword(name_tok)) {
+        return std::unexpected(PravahaError{
+            ErrorKind::ParseError,
+            "reserved keyword cannot be used as pipeline name"
+        });
+    }
+
+    auto name = capture_identifier(text, pos, "pipeline_name");
+    if (!name.has_value()) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected pipeline name"});
+    }
+
+    pos = name->capture.end;
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+    if (pos >= text.size() || text[pos] != '{') {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after pipeline name"});
+    }
+
+    const auto header_expr = lithe::make_node<pipeline_tag>(
+        keyword_expr(kw->capture.text, kw->capture.begin, kw->capture.end),
+        identifier_expr(name->capture.text, name->capture.begin, name->capture.end)
+    );
+
+    PipelineHeaderParse out;
+    out.name = name->capture.text;
+    out.body_start_offset = pos + 1;
+    out.pipeline_keyword = std::move(*kw);
+    out.pipeline_name = std::move(*name);
+    out.lithe_dump = lithe::emit::dump(header_expr);
+    out.lithe_hash = lithe::emit::structural_hash(header_expr);
+    return out;
 }
 
 } // namespace lithe_frontend
@@ -2023,20 +2124,6 @@ auto parallel_reduce(
 
 } // namespace pravaha
 
-namespace std {
-
-template<>
-struct hash<pravaha::symbolic::lithe_frontend::TokenCapture> {
-    std::size_t operator()(const pravaha::symbolic::lithe_frontend::TokenCapture& tok) const noexcept {
-        std::size_t h = std::hash<std::string>{}(tok.kind);
-        h ^= (std::hash<std::string>{}(tok.text) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
-        h ^= (std::hash<std::size_t>{}(tok.begin) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
-        h ^= (std::hash<std::size_t>{}(tok.end) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
-        return h;
-    }
-};
-
-} // namespace std
 
 namespace lithe::emit {
 

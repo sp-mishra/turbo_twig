@@ -1443,6 +1443,56 @@ TEST_CASE("pravaha lithe frontend captures tokens", "[pravaha][parse][lithe]") {
     REQUIRE(reserved.error().kind == pravaha::ErrorKind::ParseError);
 }
 
+TEST_CASE("pravaha lithe frontend parses pipeline header", "[pravaha][parse][lithe]") {
+    using pravaha::symbolic::lithe_frontend::parse_pipeline_header;
+
+    {
+        constexpr std::string_view src = "pipeline p { a then b }";
+        auto parsed = parse_pipeline_header(src);
+        REQUIRE(parsed.has_value());
+        REQUIRE(parsed->name == "p");
+        REQUIRE(parsed->body_start_offset == src.find('{') + 1);
+        REQUIRE(parsed->lithe_hash != 0);
+        REQUIRE(parsed->lithe_dump.find("pravaha.pipeline") != std::string::npos);
+    }
+
+    {
+        auto parsed = parse_pipeline_header("   pipeline startup { load_config }");
+        REQUIRE(parsed.has_value());
+        REQUIRE(parsed->name == "startup");
+    }
+
+    {
+        auto parsed = parse_pipeline_header("pipelinex p { a }");
+        REQUIRE(!parsed.has_value());
+        REQUIRE(parsed.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(parsed.error().message.find("pipeline") != std::string::npos);
+    }
+
+    {
+        auto parsed = parse_pipeline_header("pipeline { a }");
+        REQUIRE(!parsed.has_value());
+        REQUIRE(parsed.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(parsed.error().message.find("name") != std::string::npos);
+    }
+
+    {
+        auto parsed = parse_pipeline_header("pipeline then { a }");
+        REQUIRE(!parsed.has_value());
+        REQUIRE(parsed.error().kind == pravaha::ErrorKind::ParseError);
+        const bool has_reserved = parsed.error().message.find("reserved") != std::string::npos;
+        const bool has_invalid = parsed.error().message.find("invalid") != std::string::npos;
+        REQUIRE((has_reserved || has_invalid));
+    }
+
+    {
+        auto parsed = parse_pipeline_header("pipeline p a }");
+        REQUIRE(!parsed.has_value());
+        REQUIRE(parsed.error().kind == pravaha::ErrorKind::ParseError);
+        REQUIRE(parsed.error().message.find("{") != std::string::npos);
+    }
+}
+
 TEST_CASE("lithe_bridge - keyword exact match", "[pravaha][parse][lithe]") {
     REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("pipeline", "pipeline"));
     REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("pipelineX", "pipeline"));
