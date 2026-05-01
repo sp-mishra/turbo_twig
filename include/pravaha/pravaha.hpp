@@ -1283,7 +1283,7 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
         if (!cmd_ptr) return std::unexpected(PravahaError{ErrorKind::SymbolNotFound, "Symbol not found: " + task->name, task->name});
         // Create a placeholder command that delegates to the registered one
         auto* raw = cmd_ptr;
-        auto wrapper = TaskCommand::make([raw]() { raw->run(); });
+        auto wrapper = TaskCommand::make([raw]() -> Outcome<Unit> { return raw->run(); });
         TaskId id = ir.add_node(task->name, ExecutionDomain::CPU, std::move(wrapper));
         starts.push_back(id);
         terminals.push_back(id);
