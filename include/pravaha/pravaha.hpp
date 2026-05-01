@@ -985,31 +985,6 @@ struct SharedSchedulerState {
                s == TaskState::Skipped || s == TaskState::Canceled;
     }
 
-    [[nodiscard]] bool has_live_work() const {
-        for (auto s : rt.node_states) {
-            if (s == TaskState::Ready || s == TaskState::Scheduled || s == TaskState::Running) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void fail_unresolved_no_progress() {
-        if (all_terminal()) return;
-        if (has_live_work()) return;
-
-        for (auto& s : rt.node_states) {
-            if (!is_terminal(s)) {
-                s = TaskState::Failed;
-            }
-        }
-        rt.errors.push_back(PravahaError{
-            ErrorKind::InternalError,
-            "scheduler made no progress; unresolved non-terminal nodes remain"
-        });
-        count_terminals();
-    }
-
     void count_terminals() {
         terminal_count = 0;
         for (auto s : rt.node_states)
@@ -1019,7 +994,59 @@ struct SharedSchedulerState {
 
 } // namespace detail
 
-template <typename Backend = InlineBackend>
+struct DefaultGraphValidationPolicy {
+    static Outcome<Unit> validate(const TaskIr& ir) {
+        return validate_ir_with_litegraph(ir);
+    }
+
+    static Outcome<std::vector<TaskId>> topological_order(const TaskIr& ir) {
+        return pravaha::topological_order(ir);
+    }
+};
+
+struct DefaultReadyPolicy {
+    template <class RuntimeStateLike>
+    static bool is_ready(const RuntimeStateLike& state, std::size_t index) {
+        return !state.canceled
+            && index < state.node_states.size()
+            && state.node_states[index] == TaskState::Ready
+            && state.remaining_deps[index] == 0;
+    }
+};
+
+struct DefaultNoProgressPolicy {
+    template <class SharedSchedulerStateLike>
+    static bool handle_no_progress(SharedSchedulerStateLike& sstate) {
+        if (sstate.all_terminal()) return false;
+
+        bool has_live_work = false;
+        for (auto s : sstate.rt.node_states) {
+            if (s == TaskState::Ready || s == TaskState::Scheduled || s == TaskState::Running) {
+                has_live_work = true;
+                break;
+            }
+        }
+        if (has_live_work) return false;
+
+        for (auto& s : sstate.rt.node_states) {
+            if (!SharedSchedulerStateLike::is_terminal(s)) {
+                s = TaskState::Failed;
+            }
+        }
+        sstate.rt.errors.push_back(PravahaError{
+            ErrorKind::InternalError,
+            "scheduler made no progress; unresolved non-terminal nodes remain"
+        });
+        sstate.count_terminals();
+        return true;
+    }
+};
+
+template <
+    typename Backend = InlineBackend,
+    typename GraphValidationPolicy = DefaultGraphValidationPolicy,
+    typename ReadyPolicy = DefaultReadyPolicy,
+    typename NoProgressPolicy = DefaultNoProgressPolicy>
 class Runner {
     Backend* backend_{nullptr};
     Backend owned_backend_;
@@ -1034,7 +1061,7 @@ public:
         if (!ir_result.has_value()) return std::unexpected(ir_result.error());
         auto& ir = ir_result.value();
 
-        auto validation = validate_ir_with_litegraph(ir);
+        auto validation = GraphValidationPolicy::validate(ir);
         if (!validation.has_value()) return std::unexpected(validation.error());
 
         auto domain_check = validate_domain_constraints(ir);
@@ -1061,7 +1088,7 @@ private:
         // Deadlock guard: no terminal completion possible if scheduler has no live work.
         {
             std::lock_guard lock(sstate->mutex);
-            sstate->fail_unresolved_no_progress();
+            NoProgressPolicy::handle_no_progress(*sstate);
         }
         sstate->cv_done.notify_all();
 
@@ -1080,7 +1107,7 @@ private:
         {
             std::lock_guard lock(sstate->mutex);
             for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
-                if (sstate->rt.node_states[i] == TaskState::Ready) {
+                if (ReadyPolicy::is_ready(sstate->rt, i)) {
                     sstate->rt.node_states[i] = TaskState::Scheduled;
                     ready_indices.push_back(i);
                 }
@@ -1114,7 +1141,7 @@ private:
 
                 // Collect newly ready nodes
                 for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
-                    if (sstate->rt.node_states[i] == TaskState::Ready) {
+                    if (ReadyPolicy::is_ready(sstate->rt, i)) {
                         sstate->rt.node_states[i] = TaskState::Scheduled;
                         newly_ready.push_back(i);
                     }
@@ -1122,7 +1149,7 @@ private:
                 sstate->count_terminals();
 
                 // Deadlock guard after completion scheduling pass.
-                sstate->fail_unresolved_no_progress();
+                NoProgressPolicy::handle_no_progress(*sstate);
             }
 
             // Submit newly ready nodes
@@ -1466,12 +1493,13 @@ struct ParallelReduceResult {
 //
 // Returns: Outcome<ParallelReduceResult<T>>
 
-template <typename Backend, typename Range, typename T, typename ReduceFn, typename CombineFn>
+template <typename Backend, typename GraphValidationPolicy, typename ReadyPolicy, typename NoProgressPolicy,
+          typename Range, typename T, typename ReduceFn, typename CombineFn>
     requires std::invocable<ReduceFn, T, std::size_t, std::size_t>
           && std::invocable<CombineFn, T, T>
           && std::copy_constructible<T>
 auto parallel_reduce(
-    Runner<Backend>& runner,
+    Runner<Backend, GraphValidationPolicy, ReadyPolicy, NoProgressPolicy>& runner,
     Range& range,
     T init,
     ReduceFn&& reduce_fn,
