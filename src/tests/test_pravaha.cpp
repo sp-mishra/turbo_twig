@@ -1166,16 +1166,16 @@ TEST_CASE("Runner<JThreadBackend> - repeated runs do not share stale state", "[p
 // SECTION 20.5: Runner Policy Slots
 // ============================================================================
 
-struct CountingGraphValidationPolicy {
+struct CountingGraphPolicy {
     static inline int validate_calls = 0;
 
     static pravaha::Outcome<pravaha::Unit> validate(const pravaha::TaskIr& ir) {
         ++validate_calls;
-        return pravaha::DefaultGraphValidationPolicy::validate(ir);
+        return pravaha::DefaultGraphAlgorithmPolicy::validate(ir);
     }
 
     static pravaha::Outcome<std::vector<pravaha::TaskId>> topological_order(const pravaha::TaskIr& ir) {
-        return pravaha::DefaultGraphValidationPolicy::topological_order(ir);
+        return pravaha::DefaultGraphAlgorithmPolicy::topological_order(ir);
     }
 };
 
@@ -1189,21 +1189,21 @@ struct CountingNoProgressPolicy {
     }
 };
 
-TEST_CASE("Runner policy slot - custom GraphValidationPolicy is used", "[pravaha][runner][policy]") {
-    CountingGraphValidationPolicy::validate_calls = 0;
-    pravaha::Runner<pravaha::InlineBackend, CountingGraphValidationPolicy> runner;
+TEST_CASE("Runner policy slot - custom GraphAlgorithmPolicy is used", "[pravaha][runner][policy]") {
+    CountingGraphPolicy::validate_calls = 0;
+    pravaha::Runner<pravaha::InlineBackend, CountingGraphPolicy> runner;
     auto a = pravaha::task("A", []() {});
     auto b = pravaha::task("B", []() {});
     auto expr = std::move(a) | std::move(b);
     auto result = runner.submit(std::move(expr));
     REQUIRE(result.has_value());
-    REQUIRE(CountingGraphValidationPolicy::validate_calls > 0);
+    REQUIRE(CountingGraphPolicy::validate_calls > 0);
 }
 
 TEST_CASE("Runner policy slot - custom NoProgressPolicy is used", "[pravaha][runner][policy]") {
     CountingNoProgressPolicy::checks = 0;
     pravaha::Runner<pravaha::InlineBackend,
-                    pravaha::DefaultGraphValidationPolicy,
+                    pravaha::DefaultGraphAlgorithmPolicy,
                     pravaha::DefaultReadyPolicy,
                     CountingNoProgressPolicy> runner;
     auto a = pravaha::task("A", []() {});

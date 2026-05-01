@@ -1000,7 +1000,7 @@ struct SharedSchedulerState {
 
 } // namespace detail
 
-struct DefaultGraphValidationPolicy {
+struct DefaultGraphAlgorithmPolicy {
     static Outcome<Unit> validate(const TaskIr& ir) {
         return validate_ir_with_litegraph(ir);
     }
@@ -1009,6 +1009,9 @@ struct DefaultGraphValidationPolicy {
         return pravaha::topological_order(ir);
     }
 };
+
+// Backward-compatible alias during transition to algorithm-policy naming.
+using DefaultGraphValidationPolicy = DefaultGraphAlgorithmPolicy;
 
 struct DefaultReadyPolicy {
     template <class RuntimeStateLike>
@@ -1050,7 +1053,7 @@ struct DefaultNoProgressPolicy {
 
 template <
     typename Backend = InlineBackend,
-    typename GraphValidationPolicy = DefaultGraphValidationPolicy,
+    typename GraphAlgorithmPolicy = DefaultGraphAlgorithmPolicy,
     typename ReadyPolicy = DefaultReadyPolicy,
     typename NoProgressPolicy = DefaultNoProgressPolicy>
 class Runner {
@@ -1067,7 +1070,7 @@ public:
         if (!ir_result.has_value()) return std::unexpected(ir_result.error());
         auto& ir = ir_result.value();
 
-        auto validation = GraphValidationPolicy::validate(ir);
+        auto validation = GraphAlgorithmPolicy::validate(ir);
         if (!validation.has_value()) return std::unexpected(validation.error());
 
         auto domain_check = validate_domain_constraints(ir);
@@ -1613,13 +1616,13 @@ struct ParallelReduceResult {
 //
 // Returns: Outcome<ParallelReduceResult<T>>
 
-template <typename Backend, typename GraphValidationPolicy, typename ReadyPolicy, typename NoProgressPolicy,
+template <typename Backend, typename GraphAlgorithmPolicy, typename ReadyPolicy, typename NoProgressPolicy,
           typename Range, typename T, typename ReduceFn, typename CombineFn>
     requires std::invocable<ReduceFn, T, std::size_t, std::size_t>
           && std::invocable<CombineFn, T, T>
           && std::copy_constructible<T>
 auto parallel_reduce(
-    Runner<Backend, GraphValidationPolicy, ReadyPolicy, NoProgressPolicy>& runner,
+    Runner<Backend, GraphAlgorithmPolicy, ReadyPolicy, NoProgressPolicy>& runner,
     Range& range,
     T init,
     ReduceFn&& reduce_fn,
