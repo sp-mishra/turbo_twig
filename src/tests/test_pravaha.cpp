@@ -600,3 +600,130 @@ TEST_CASE("TaskCommand - no std::function usage", "[pravaha][taskcommand]") {
     auto result = cmd.run();
     REQUIRE(result.has_value());
 }
+
+// ============================================================================
+// SECTION 13: Lazy Expression DSL
+// ============================================================================
+
+TEST_CASE("task() - creating task does not execute callable", "[pravaha][dsl]") {
+    int counter = 0;
+    auto a = pravaha::task("a", [&counter]() { ++counter; });
+
+    // Callable must NOT have been executed
+    REQUIRE(counter == 0);
+    REQUIRE(a.name() == "a");
+    REQUIRE(a.domain() == pravaha::ExecutionDomain::CPU);
+}
+
+TEST_CASE("task() - sequence composition does not execute callable", "[pravaha][dsl]") {
+    int counter_a = 0;
+    int counter_b = 0;
+
+    auto a = pravaha::task("a", [&counter_a]() { ++counter_a; });
+    auto b = pravaha::task("b", [&counter_b]() { ++counter_b; });
+    auto seq = std::move(a) | std::move(b);
+
+    REQUIRE(counter_a == 0);
+    REQUIRE(counter_b == 0);
+
+    // Verify the expression type satisfies IsPravahaExpr
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(seq)>);
+}
+
+TEST_CASE("task() - parallel composition does not execute callable", "[pravaha][dsl]") {
+    int counter_a = 0;
+    int counter_b = 0;
+
+    auto a = pravaha::task("a", [&counter_a]() { ++counter_a; });
+    auto b = pravaha::task("b", [&counter_b]() { ++counter_b; });
+    auto par = std::move(a) & std::move(b);
+
+    REQUIRE(counter_a == 0);
+    REQUIRE(counter_b == 0);
+
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(par)>);
+}
+
+TEST_CASE("task() - nested expression compiles", "[pravaha][dsl]") {
+    int x = 0;
+    auto a = pravaha::task("a", [&x]() { x += 1; });
+    auto b = pravaha::task("b", [&x]() { x += 2; });
+    auto c = pravaha::task("c", [&x]() { x += 3; });
+
+    // (a & b) | c — parallel a,b then sequence into c
+    auto expr = (std::move(a) & std::move(b)) | std::move(c);
+
+    REQUIRE(x == 0);  // Nothing executed
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(expr)>);
+}
+
+TEST_CASE("task() - move-only callable can be stored", "[pravaha][dsl]") {
+    auto ptr = std::make_unique<int>(99);
+    int* raw = ptr.get();
+
+    auto t = pravaha::task("move_task", [p = std::move(ptr)]() mutable {
+        *p += 1;
+    });
+
+    // Not executed
+    REQUIRE(*raw == 99);
+    REQUIRE(t.name() == "move_task");
+
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(t)>);
+}
+
+TEST_CASE("task_on() - stores selected ExecutionDomain", "[pravaha][dsl]") {
+    auto t = pravaha::task_on(pravaha::ExecutionDomain::IO, "io_task", []() {});
+
+    REQUIRE(t.name() == "io_task");
+    REQUIRE(t.domain() == pravaha::ExecutionDomain::IO);
+}
+
+TEST_CASE("task_on() - various domains", "[pravaha][dsl]") {
+    auto t1 = pravaha::task_on(pravaha::ExecutionDomain::Inline, "inline_t", [](){});
+    auto t2 = pravaha::task_on(pravaha::ExecutionDomain::Fiber, "fiber_t", [](){});
+    auto t3 = pravaha::task_on(pravaha::ExecutionDomain::Coroutine, "coro_t", [](){});
+    auto t4 = pravaha::task_on(pravaha::ExecutionDomain::External, "ext_t", [](){});
+
+    REQUIRE(t1.domain() == pravaha::ExecutionDomain::Inline);
+    REQUIRE(t2.domain() == pravaha::ExecutionDomain::Fiber);
+    REQUIRE(t3.domain() == pravaha::ExecutionDomain::Coroutine);
+    REQUIRE(t4.domain() == pravaha::ExecutionDomain::External);
+}
+
+TEST_CASE("IsPravahaExpr concept", "[pravaha][dsl]") {
+    auto t = pravaha::task("t", [](){});
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(t)>);
+    STATIC_REQUIRE(!pravaha::IsPravahaExpr<int>);
+    STATIC_REQUIRE(!pravaha::IsPravahaExpr<std::string>);
+}
+
+TEST_CASE("collect_all() - marks parallel expr with CollectAll", "[pravaha][dsl]") {
+    auto a = pravaha::task("a", [](){});
+    auto b = pravaha::task("b", [](){});
+    auto par = std::move(a) & std::move(b);
+
+    REQUIRE(par.policy == pravaha::JoinPolicyKind::AllOrNothing);
+
+    auto collected = pravaha::collect_all(std::move(par));
+    REQUIRE(collected.policy == pravaha::JoinPolicyKind::CollectAll);
+}
+
+TEST_CASE("operator| and operator& - compose different expression types", "[pravaha][dsl]") {
+    auto a = pravaha::task("a", [](){});
+    auto b = pravaha::task("b", [](){});
+    auto c = pravaha::task("c", [](){});
+    auto d = pravaha::task("d", [](){});
+
+    // a | b : sequence
+    auto seq = std::move(a) | std::move(b);
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(seq)>);
+
+    // c & d : parallel
+    auto par = std::move(c) & std::move(d);
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(par)>);
+
+    // seq | par : sequence of composed expressions
+    auto combined = std::move(seq) | std::move(par);
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(combined)>);
+}

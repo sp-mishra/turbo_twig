@@ -520,4 +520,148 @@ public:
     }
 };
 
+// ============================================================================
+//  SECTION 6: LAZY EXPRESSION DSL
+// ============================================================================
+
+// Forward declarations
+template <typename F> class TaskExpr;
+template <typename L, typename R> struct SequenceExpr;
+template <typename L, typename R> struct ParallelExpr;
+
+// ---------------------------------------------------------------------------
+// 6.1 IsPravahaExpr — concept to identify expression tree nodes
+// ---------------------------------------------------------------------------
+namespace detail {
+
+template <typename T>
+struct is_pravaha_expr_impl : std::false_type {};
+
+template <typename F>
+struct is_pravaha_expr_impl<TaskExpr<F>> : std::true_type {};
+
+template <typename L, typename R>
+struct is_pravaha_expr_impl<SequenceExpr<L, R>> : std::true_type {};
+
+template <typename L, typename R>
+struct is_pravaha_expr_impl<ParallelExpr<L, R>> : std::true_type {};
+
+} // namespace detail
+
+template <typename T>
+concept IsPravahaExpr = detail::is_pravaha_expr_impl<std::remove_cvref_t<T>>::value;
+
+// ---------------------------------------------------------------------------
+// 6.2 TaskExpr<F> — lazy single-task expression node
+// ---------------------------------------------------------------------------
+// Stores a name, callable, and execution domain. Does NOT execute on construction.
+template <typename F>
+class TaskExpr {
+    std::string     name_;
+    F               callable_;
+    ExecutionDomain domain_;
+
+public:
+    TaskExpr(std::string name, F callable, ExecutionDomain domain = ExecutionDomain::CPU)
+        : name_{std::move(name)}
+        , callable_{std::move(callable)}
+        , domain_{domain}
+    {}
+
+    // Accessors
+    [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    [[nodiscard]] ExecutionDomain domain() const noexcept { return domain_; }
+    [[nodiscard]] const F& callable() const noexcept { return callable_; }
+    [[nodiscard]] F& callable() noexcept { return callable_; }
+};
+
+// ---------------------------------------------------------------------------
+// 6.3 SequenceExpr<L, R> — two expressions composed in sequence (L then R)
+// ---------------------------------------------------------------------------
+template <typename L, typename R>
+struct SequenceExpr {
+    L left;
+    R right;
+
+    SequenceExpr(L l, R r)
+        : left{std::move(l)}
+        , right{std::move(r)}
+    {}
+};
+
+// ---------------------------------------------------------------------------
+// 6.4 ParallelExpr<L, R> — two expressions composed in parallel (L and R)
+// ---------------------------------------------------------------------------
+template <typename L, typename R>
+struct ParallelExpr {
+    L              left;
+    R              right;
+    JoinPolicyKind policy;
+
+    ParallelExpr(L l, R r, JoinPolicyKind p = JoinPolicyKind::AllOrNothing)
+        : left{std::move(l)}
+        , right{std::move(r)}
+        , policy{p}
+    {}
+};
+
+// ---------------------------------------------------------------------------
+// 6.5 task() — factory for TaskExpr (lazy, does not execute)
+// ---------------------------------------------------------------------------
+template <typename F>
+    requires std::move_constructible<std::decay_t<F>>
+[[nodiscard]] auto task(std::string name, F&& callable) {
+    return TaskExpr<std::decay_t<F>>{std::move(name), std::forward<F>(callable)};
+}
+
+// ---------------------------------------------------------------------------
+// 6.6 task_on() — factory for TaskExpr with explicit ExecutionDomain
+// ---------------------------------------------------------------------------
+template <typename F>
+    requires std::move_constructible<std::decay_t<F>>
+[[nodiscard]] auto task_on(ExecutionDomain domain, std::string name, F&& callable) {
+    return TaskExpr<std::decay_t<F>>{std::move(name), std::forward<F>(callable), domain};
+}
+
+// ---------------------------------------------------------------------------
+// 6.7 operator| — sequence composition
+// ---------------------------------------------------------------------------
+template <IsPravahaExpr L, IsPravahaExpr R>
+[[nodiscard]] auto operator|(L&& lhs, R&& rhs) {
+    return SequenceExpr<std::decay_t<L>, std::decay_t<R>>{
+        std::forward<L>(lhs), std::forward<R>(rhs)
+    };
+}
+
+// ---------------------------------------------------------------------------
+// 6.8 operator& — parallel composition
+// ---------------------------------------------------------------------------
+template <IsPravahaExpr L, IsPravahaExpr R>
+[[nodiscard]] auto operator&(L&& lhs, R&& rhs) {
+    return ParallelExpr<std::decay_t<L>, std::decay_t<R>>{
+        std::forward<L>(lhs), std::forward<R>(rhs)
+    };
+}
+
+// ---------------------------------------------------------------------------
+// 6.9 collect_all() — marks a parallel expression with CollectAll policy
+// ---------------------------------------------------------------------------
+template <typename L, typename R>
+[[nodiscard]] auto collect_all(ParallelExpr<L, R> expr) {
+    expr.policy = JoinPolicyKind::CollectAll;
+    return expr;
+}
+
+// Overload for any expression that creates a ParallelExpr wrapper with CollectAll
+template <IsPravahaExpr E>
+    requires (!requires { typename std::remove_cvref_t<E>::left; typename std::remove_cvref_t<E>::right; } ||
+              !std::same_as<std::remove_cvref_t<E>,
+                            ParallelExpr<typename std::remove_cvref_t<E>::left,
+                                         typename std::remove_cvref_t<E>::right>>)
+[[nodiscard]] auto collect_all(E&& expr) {
+    // For non-ParallelExpr types, wrap in a parallel-with-self is not meaningful.
+    // Return as-is — this overload exists for forward compatibility.
+    return std::forward<E>(expr);
+}
+
 } // namespace pravaha
