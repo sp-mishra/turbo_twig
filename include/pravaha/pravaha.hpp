@@ -20,6 +20,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 // Project dependencies
 #include "containers/graph/LiteGraph.hpp"
@@ -662,6 +663,211 @@ template <IsPravahaExpr E>
     // For non-ParallelExpr types, wrap in a parallel-with-self is not meaningful.
     // Return as-is — this overload exists for forward compatibility.
     return std::forward<E>(expr);
+}
+
+// ============================================================================
+//  SECTION 7: TASK IR — INTERMEDIATE REPRESENTATION & LOWERING
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// 7.1 TaskId — strong wrapper around std::size_t
+// ---------------------------------------------------------------------------
+struct TaskId {
+    std::size_t value;
+
+    static constexpr std::size_t invalid_value = ~std::size_t{0};
+
+    constexpr TaskId() noexcept : value{invalid_value} {}
+    constexpr explicit TaskId(std::size_t v) noexcept : value{v} {}
+
+    [[nodiscard]] constexpr bool is_valid() const noexcept {
+        return value != invalid_value;
+    }
+
+    constexpr bool operator==(const TaskId&) const noexcept = default;
+    constexpr auto operator<=>(const TaskId&) const noexcept = default;
+};
+
+inline constexpr TaskId invalid_task_id{};
+
+// ---------------------------------------------------------------------------
+// 7.2 EdgeKind — type of dependency edge
+// ---------------------------------------------------------------------------
+enum class EdgeKind {
+    Sequence,
+    Data,
+    Cancellation,
+    Join
+};
+
+// ---------------------------------------------------------------------------
+// 7.3 IrNode — a single task node in the IR
+// ---------------------------------------------------------------------------
+struct IrNode {
+    TaskId          id;
+    std::string     name;
+    ExecutionDomain domain{ExecutionDomain::CPU};
+    TaskState       state{TaskState::Created};
+    TaskCommand     command;
+
+    IrNode() = default;
+    IrNode(TaskId id_, std::string name_, ExecutionDomain dom_, TaskCommand cmd_)
+        : id{id_}
+        , name{std::move(name_)}
+        , domain{dom_}
+        , state{TaskState::Created}
+        , command{std::move(cmd_)}
+    {}
+};
+
+// ---------------------------------------------------------------------------
+// 7.4 IrEdge — a dependency edge between two nodes
+// ---------------------------------------------------------------------------
+struct IrEdge {
+    TaskId   from;
+    TaskId   to;
+    EdgeKind kind;
+
+    IrEdge() = default;
+    IrEdge(TaskId f, TaskId t, EdgeKind k) noexcept
+        : from{f}, to{t}, kind{k}
+    {}
+};
+
+// ---------------------------------------------------------------------------
+// 7.5 TaskIr — the full intermediate representation
+// ---------------------------------------------------------------------------
+struct TaskIr {
+    std::vector<IrNode> nodes;
+    std::vector<IrEdge> edges;
+
+    // Add a node and return its TaskId
+    TaskId add_node(std::string name, ExecutionDomain domain, TaskCommand cmd) {
+        TaskId id{nodes.size()};
+        nodes.emplace_back(id, std::move(name), domain, std::move(cmd));
+        return id;
+    }
+
+    // Add an edge
+    void add_edge(TaskId from, TaskId to, EdgeKind kind) {
+        edges.emplace_back(from, to, kind);
+    }
+
+    [[nodiscard]] std::size_t node_count() const noexcept { return nodes.size(); }
+    [[nodiscard]] std::size_t edge_count() const noexcept { return edges.size(); }
+};
+
+// ---------------------------------------------------------------------------
+// 7.6 LowerResult — internal helper for recursive lowering
+// ---------------------------------------------------------------------------
+namespace detail {
+
+struct LowerResult {
+    std::vector<TaskId> starts;
+    std::vector<TaskId> terminals;
+    TaskIr              ir;
+};
+
+// Merge src into dst, remapping TaskIds. Returns remapped starts/terminals.
+inline LowerResult merge_into(LowerResult& dst, LowerResult src) {
+    const std::size_t offset = dst.ir.nodes.size();
+
+    // Move nodes with remapped ids
+    for (auto& node : src.ir.nodes) {
+        node.id = TaskId{node.id.value + offset};
+        dst.ir.nodes.push_back(std::move(node));
+    }
+
+    // Move edges with remapped ids
+    for (auto& edge : src.ir.edges) {
+        edge.from = TaskId{edge.from.value + offset};
+        edge.to   = TaskId{edge.to.value + offset};
+        dst.ir.edges.push_back(std::move(edge));
+    }
+
+    // Remap starts and terminals
+    std::vector<TaskId> remapped_starts;
+    remapped_starts.reserve(src.starts.size());
+    for (auto id : src.starts)
+        remapped_starts.emplace_back(id.value + offset);
+
+    std::vector<TaskId> remapped_terminals;
+    remapped_terminals.reserve(src.terminals.size());
+    for (auto id : src.terminals)
+        remapped_terminals.emplace_back(id.value + offset);
+
+    return LowerResult{std::move(remapped_starts), std::move(remapped_terminals), {}};
+}
+
+// Forward declarations for all lower_impl overloads (required for mutual visibility)
+template <typename F>
+LowerResult lower_impl(TaskExpr<F> expr);
+
+template <typename L, typename R>
+LowerResult lower_impl(SequenceExpr<L, R> expr);
+
+template <typename L, typename R>
+LowerResult lower_impl(ParallelExpr<L, R> expr);
+
+// Lowering: TaskExpr → single IrNode
+template <typename F>
+LowerResult lower_impl(TaskExpr<F> expr) {
+    LowerResult result;
+    auto cmd = TaskCommand::make(std::move(expr.callable()), expr.name());
+    TaskId id = result.ir.add_node(expr.name(), expr.domain(), std::move(cmd));
+    result.starts.push_back(id);
+    result.terminals.push_back(id);
+    return result;
+}
+
+// Lowering: SequenceExpr → left then right, with Sequence edges
+template <typename L, typename R>
+LowerResult lower_impl(SequenceExpr<L, R> expr) {
+    auto left_result = lower_impl(std::move(expr.left));
+    auto right_result = lower_impl(std::move(expr.right));
+
+    // Merge right into left
+    auto right_remap = merge_into(left_result, std::move(right_result));
+
+    // Add Sequence edges: every terminal of left → every start of right
+    for (auto t : left_result.terminals) {
+        for (auto s : right_remap.starts) {
+            left_result.ir.add_edge(t, s, EdgeKind::Sequence);
+        }
+    }
+
+    // Result: starts of left, terminals of right
+    left_result.terminals = std::move(right_remap.terminals);
+    return left_result;
+}
+
+// Lowering: ParallelExpr → both sides independent
+template <typename L, typename R>
+LowerResult lower_impl(ParallelExpr<L, R> expr) {
+    auto left_result = lower_impl(std::move(expr.left));
+    auto right_result = lower_impl(std::move(expr.right));
+
+    // Merge right into left (no edges between them)
+    auto right_remap = merge_into(left_result, std::move(right_result));
+
+    // Result: combined starts and combined terminals
+    for (auto s : right_remap.starts)
+        left_result.starts.push_back(s);
+    for (auto t : right_remap.terminals)
+        left_result.terminals.push_back(t);
+
+    return left_result;
+}
+
+} // namespace detail
+
+// ---------------------------------------------------------------------------
+// 7.7 lower_to_ir() — public API for lowering expressions to TaskIr
+// ---------------------------------------------------------------------------
+template <IsPravahaExpr Expr>
+Outcome<TaskIr> lower_to_ir(Expr&& expr) {
+    auto result = detail::lower_impl(std::move(expr));
+    return std::move(result.ir);
 }
 
 } // namespace pravaha

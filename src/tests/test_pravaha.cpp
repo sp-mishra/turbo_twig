@@ -727,3 +727,186 @@ TEST_CASE("operator| and operator& - compose different expression types", "[prav
     auto combined = std::move(seq) | std::move(par);
     STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(combined)>);
 }
+
+// ============================================================================
+// SECTION 14: Task IR — Intermediate Representation & Lowering
+// ============================================================================
+
+TEST_CASE("TaskId - basic properties", "[pravaha][ir]") {
+    pravaha::TaskId id0{0};
+    pravaha::TaskId id1{1};
+    pravaha::TaskId invalid{};
+
+    REQUIRE(id0.is_valid());
+    REQUIRE(id1.is_valid());
+    REQUIRE(!invalid.is_valid());
+    REQUIRE(id0 != id1);
+    REQUIRE(id0 == pravaha::TaskId{0});
+    REQUIRE(invalid == pravaha::invalid_task_id);
+}
+
+TEST_CASE("lower_to_ir - single task lowers to one node", "[pravaha][ir]") {
+    int counter = 0;
+    auto a = pravaha::task("a", [&counter]() { ++counter; });
+
+    auto result = pravaha::lower_to_ir(std::move(a));
+    REQUIRE(result.has_value());
+
+    auto& ir = result.value();
+    REQUIRE(ir.node_count() == 1);
+    REQUIRE(ir.edge_count() == 0);
+    REQUIRE(ir.nodes[0].name == "a");
+    REQUIRE(ir.nodes[0].domain == pravaha::ExecutionDomain::CPU);
+    REQUIRE(ir.nodes[0].state == pravaha::TaskState::Created);
+    REQUIRE(ir.nodes[0].command.has_value());
+
+    // Lowering does NOT run the task
+    REQUIRE(counter == 0);
+}
+
+TEST_CASE("lower_to_ir - sequence lowers to two nodes and one Sequence edge", "[pravaha][ir]") {
+    int counter = 0;
+    auto a = pravaha::task("a", [&counter]() { ++counter; });
+    auto b = pravaha::task("b", [&counter]() { ++counter; });
+
+    auto expr = std::move(a) | std::move(b);
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+
+    auto& ir = result.value();
+    REQUIRE(ir.node_count() == 2);
+    REQUIRE(ir.edge_count() == 1);
+
+    // Edge goes from node 0 (a) to node 1 (b)
+    REQUIRE(ir.edges[0].from == pravaha::TaskId{0});
+    REQUIRE(ir.edges[0].to == pravaha::TaskId{1});
+    REQUIRE(ir.edges[0].kind == pravaha::EdgeKind::Sequence);
+
+    // Names are correct
+    REQUIRE(ir.nodes[0].name == "a");
+    REQUIRE(ir.nodes[1].name == "b");
+
+    // Not executed
+    REQUIRE(counter == 0);
+}
+
+TEST_CASE("lower_to_ir - parallel lowers to two nodes and no Sequence edge", "[pravaha][ir]") {
+    int counter = 0;
+    auto a = pravaha::task("a", [&counter]() { ++counter; });
+    auto b = pravaha::task("b", [&counter]() { ++counter; });
+
+    auto expr = std::move(a) & std::move(b);
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+
+    auto& ir = result.value();
+    REQUIRE(ir.node_count() == 2);
+    REQUIRE(ir.edge_count() == 0);  // No edges between parallel tasks
+
+    REQUIRE(ir.nodes[0].name == "a");
+    REQUIRE(ir.nodes[1].name == "b");
+
+    // Not executed
+    REQUIRE(counter == 0);
+}
+
+TEST_CASE("lower_to_ir - (A & B) | C has edges A->C and B->C", "[pravaha][ir]") {
+    int counter = 0;
+    auto a = pravaha::task("A", [&counter]() { ++counter; });
+    auto b = pravaha::task("B", [&counter]() { ++counter; });
+    auto c = pravaha::task("C", [&counter]() { ++counter; });
+
+    // (A & B) | C: parallel A,B then sequence into C
+    auto expr = (std::move(a) & std::move(b)) | std::move(c);
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+
+    auto& ir = result.value();
+    REQUIRE(ir.node_count() == 3);
+    REQUIRE(ir.edge_count() == 2);  // A->C and B->C
+
+    // Find node indices by name
+    std::size_t a_idx = ~0u, b_idx = ~0u, c_idx = ~0u;
+    for (std::size_t i = 0; i < ir.nodes.size(); ++i) {
+        if (ir.nodes[i].name == "A") a_idx = i;
+        if (ir.nodes[i].name == "B") b_idx = i;
+        if (ir.nodes[i].name == "C") c_idx = i;
+    }
+    REQUIRE(a_idx != ~0u);
+    REQUIRE(b_idx != ~0u);
+    REQUIRE(c_idx != ~0u);
+
+    // Both edges should point to C
+    bool has_a_to_c = false;
+    bool has_b_to_c = false;
+    for (auto& edge : ir.edges) {
+        if (edge.from == pravaha::TaskId{a_idx} && edge.to == pravaha::TaskId{c_idx})
+            has_a_to_c = true;
+        if (edge.from == pravaha::TaskId{b_idx} && edge.to == pravaha::TaskId{c_idx})
+            has_b_to_c = true;
+    }
+    REQUIRE(has_a_to_c);
+    REQUIRE(has_b_to_c);
+
+    // Not executed
+    REQUIRE(counter == 0);
+}
+
+TEST_CASE("lower_to_ir - A & (B | C) has only B->C dependency", "[pravaha][ir]") {
+    int counter = 0;
+    auto a = pravaha::task("A", [&counter]() { ++counter; });
+    auto b = pravaha::task("B", [&counter]() { ++counter; });
+    auto c = pravaha::task("C", [&counter]() { ++counter; });
+
+    // A & (B | C): A in parallel with sequence B->C
+    auto expr = std::move(a) & (std::move(b) | std::move(c));
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+
+    auto& ir = result.value();
+    REQUIRE(ir.node_count() == 3);
+    // Only one edge: B->C (sequence within the right branch)
+    REQUIRE(ir.edge_count() == 1);
+
+    // Find node indices by name
+    std::size_t b_idx = ~0u, c_idx = ~0u;
+    for (std::size_t i = 0; i < ir.nodes.size(); ++i) {
+        if (ir.nodes[i].name == "B") b_idx = i;
+        if (ir.nodes[i].name == "C") c_idx = i;
+    }
+    REQUIRE(b_idx != ~0u);
+    REQUIRE(c_idx != ~0u);
+
+    REQUIRE(ir.edges[0].from == pravaha::TaskId{b_idx});
+    REQUIRE(ir.edges[0].to == pravaha::TaskId{c_idx});
+    REQUIRE(ir.edges[0].kind == pravaha::EdgeKind::Sequence);
+
+    // Not executed
+    REQUIRE(counter == 0);
+}
+
+TEST_CASE("lower_to_ir - lowering does not run tasks", "[pravaha][ir]") {
+    int counter = 0;
+    auto a = pravaha::task("a", [&counter]() { counter += 10; });
+    auto b = pravaha::task("b", [&counter]() { counter += 20; });
+    auto c = pravaha::task("c", [&counter]() { counter += 30; });
+
+    auto expr = (std::move(a) | std::move(b)) & std::move(c);
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(counter == 0);
+}
+
+TEST_CASE("lower_to_ir - commands are runnable after lowering", "[pravaha][ir]") {
+    int counter = 0;
+    auto a = pravaha::task("a", [&counter]() { counter += 1; });
+
+    auto result = pravaha::lower_to_ir(std::move(a));
+    REQUIRE(result.has_value());
+    REQUIRE(counter == 0);
+
+    // Run the command manually
+    auto run_result = result.value().nodes[0].command.run();
+    REQUIRE(run_result.has_value());
+    REQUIRE(counter == 1);
+}
