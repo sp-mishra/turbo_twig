@@ -1731,6 +1731,67 @@ TEST_CASE("parse_pipeline builds stable lithe frontend signature for full symbol
     REQUIRE(seq_meta_1.hash != par_meta.hash);
 }
 
+TEST_CASE("pravaha textual frontend is lithe-backed", "[pravaha][parse][lithe]") {
+    {
+        auto ok = pravaha::parse_pipeline("pipeline p { a then b }");
+        REQUIRE(ok.has_value());
+        REQUIRE(ok->frontend.hash != 0);
+        REQUIRE_FALSE(ok->frontend.dump.empty());
+    }
+
+    {
+        auto p1 = pravaha::parse_pipeline("pipeline p { a then b }");
+        auto p2 = pravaha::parse_pipeline("pipeline p { a then b }");
+        REQUIRE(p1.has_value());
+        REQUIRE(p2.has_value());
+        REQUIRE(p1->frontend.hash == p2->frontend.hash);
+    }
+
+    {
+        auto p1 = pravaha::parse_pipeline("pipeline p { a then b }");
+        auto p2 = pravaha::parse_pipeline("pipeline p { b then a }");
+        REQUIRE(p1.has_value());
+        REQUIRE(p2.has_value());
+        REQUIRE(p1->frontend.hash != p2->frontend.hash);
+    }
+
+    {
+        auto bad_kw = pravaha::parse_pipeline("pipelinex p { a }");
+        REQUIRE(!bad_kw.has_value());
+        REQUIRE(bad_kw.error().message.find("pipeline") != std::string::npos);
+    }
+    {
+        auto missing_name = pravaha::parse_pipeline("pipeline { a }");
+        REQUIRE(!missing_name.has_value());
+        REQUIRE(missing_name.error().message.find("pipeline name") != std::string::npos);
+    }
+    {
+        auto reserved_name = pravaha::parse_pipeline("pipeline then { a }");
+        REQUIRE(!reserved_name.has_value());
+        REQUIRE(reserved_name.error().message.find("reserved") != std::string::npos);
+    }
+    {
+        auto missing_brace = pravaha::parse_pipeline("pipeline p a }");
+        REQUIRE(!missing_brace.has_value());
+        REQUIRE(missing_brace.error().message.find("{") != std::string::npos);
+    }
+    {
+        auto invalid_id = pravaha::parse_pipeline("pipeline p { 1task }");
+        REQUIRE(!invalid_id.has_value());
+        REQUIRE(invalid_id.error().message.find("identifier") != std::string::npos);
+    }
+    {
+        auto reserved_id = pravaha::parse_pipeline("pipeline p { then }");
+        REQUIRE(!reserved_id.has_value());
+        REQUIRE(reserved_id.error().message.find("reserved") != std::string::npos);
+    }
+    {
+        auto invalid_parallel_kw = pravaha::parse_pipeline("pipeline p { parallelx { a, b } }");
+        REQUIRE(!invalid_parallel_kw.has_value());
+        REQUIRE(invalid_parallel_kw.error().message.find("parallel") != std::string::npos);
+    }
+}
+
 TEST_CASE("parse_pipeline - parallel block", "[pravaha][parse]") {
     auto result = pravaha::parse_pipeline("pipeline p { a then parallel { b, c } then d }");
     REQUIRE(result.has_value());

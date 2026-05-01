@@ -1905,6 +1905,20 @@ struct Parser {
             pos = intro->body_start_offset;
             return parse_parallel();
         }
+
+        // If a token looks like a misspelled parallel block intro and is
+        // directly followed by '{', report a parallel-keyword diagnostic.
+        if (tok.starts_with("parallel") && tok != "parallel") {
+            const auto saved = pos;
+            (void)consume_token();
+            skip_ws();
+            const bool has_open_brace = (pos < src.size() && src[pos] == '{');
+            pos = saved;
+            if (has_open_brace) {
+                return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'parallel'"});
+            }
+        }
+
         auto id_ok = validate_task_identifier(tok);
         if (!id_ok.has_value()) return std::unexpected(id_ok.error());
         auto consumed = consume_token();
@@ -1949,10 +1963,18 @@ struct Parser {
         auto body = parse_sequence();
         if (!body.has_value()) return std::unexpected(body.error());
         if (!expect("}")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '}'"});
+
+        auto root = std::move(body.value());
+        auto root_meta = make_frontend_meta_for_symbolic_expr(root);
+        const auto pipeline_expr = lithe::make_node<lithe_frontend::pipeline_tag>(
+            lithe::as_expr(header->lithe_hash),
+            lithe::as_expr(root_meta.hash)
+        );
+
         return SymbolicPipeline{
             std::move(header->name),
-            std::move(body.value()),
-            LitheFrontendMeta{std::move(header->lithe_dump), header->lithe_hash}
+            std::move(root),
+            LitheFrontendMeta{lithe::emit::dump(pipeline_expr), lithe::emit::structural_hash(pipeline_expr)}
         };
     }
 };
