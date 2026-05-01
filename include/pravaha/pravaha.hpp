@@ -934,9 +934,12 @@ public:
     JThreadBackend& operator=(JThreadBackend&&) = delete;
 
     void submit(TaskCommand cmd) {
-        in_flight_.fetch_add(1, std::memory_order_acquire);
         {
             std::lock_guard lock(mutex_);
+            if (stop_requested_.load(std::memory_order_acquire)) {
+                return;
+            }
+            in_flight_.fetch_add(1, std::memory_order_release);
             queue_.push_back(std::move(cmd));
         }
         cv_work_.notify_one();
@@ -953,6 +956,7 @@ public:
         stop_requested_.store(true, std::memory_order_release);
         for (auto& w : workers_) w.request_stop();
         cv_work_.notify_all();
+        cv_drain_.notify_all();
     }
 
     [[nodiscard]] bool stopped() const noexcept {
