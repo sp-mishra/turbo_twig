@@ -962,3 +962,58 @@ TEST_CASE("CollectAll - normal AllOrNothing behavior remains unchanged", "[prava
     REQUIRE(result.value().node_states[2] == pravaha::TaskState::Skipped);
     REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
 }
+
+// ============================================================================
+// SECTION 19: JThreadBackend
+// ============================================================================
+
+TEST_CASE("JThreadBackend - submit and drain executes command", "[pravaha][jthread]") {
+    std::atomic<int> counter{0};
+    {
+        pravaha::JThreadBackend backend(2);
+        backend.submit(pravaha::TaskCommand::make([&counter]() { counter.fetch_add(1); }));
+        backend.drain();
+    }
+    REQUIRE(counter.load() == 1);
+}
+
+TEST_CASE("JThreadBackend - multiple commands execute", "[pravaha][jthread]") {
+    std::atomic<int> counter{0};
+    {
+        pravaha::JThreadBackend backend(2);
+        for (int i = 0; i < 10; ++i) {
+            backend.submit(pravaha::TaskCommand::make([&counter]() { counter.fetch_add(1); }));
+        }
+        backend.drain();
+    }
+    REQUIRE(counter.load() == 10);
+}
+
+TEST_CASE("JThreadBackend - request_stop is safe", "[pravaha][jthread]") {
+    pravaha::JThreadBackend backend(2);
+    backend.request_stop();
+    REQUIRE(backend.stopped());
+}
+
+TEST_CASE("JThreadBackend - destructor does not deadlock", "[pravaha][jthread]") {
+    std::atomic<int> counter{0};
+    {
+        pravaha::JThreadBackend backend(2);
+        backend.submit(pravaha::TaskCommand::make([&counter]() { counter.fetch_add(1); }));
+        // destructor should join cleanly without deadlock
+    }
+    // Command may or may not have executed before stop, but no deadlock occurred
+    REQUIRE(true);
+}
+
+TEST_CASE("JThreadBackend - no graph logic in backend", "[pravaha][jthread]") {
+    // Backend only knows about TaskCommand, not TaskIr or graph topology
+    std::atomic<int> val{0};
+    {
+        pravaha::JThreadBackend backend(1);
+        auto cmd = pravaha::TaskCommand::make([&val]() { val.store(42); });
+        backend.submit(std::move(cmd));
+        backend.drain();
+    }
+    REQUIRE(val.load() == 42);
+}

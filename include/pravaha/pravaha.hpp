@@ -7,15 +7,19 @@
 
 #include <atomic>
 #include <concepts>
+#include <condition_variable>
 #include <cstddef>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <expected>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -599,6 +603,89 @@ public:
     void drain() noexcept {}
     void request_stop() noexcept { stop_requested_ = true; }
     [[nodiscard]] bool stopped() const noexcept { return stop_requested_; }
+};
+
+// ============================================================================
+//  SECTION 10.5: JTHREAD BACKEND
+// ============================================================================
+
+class JThreadBackend {
+    mutable std::mutex mutex_;
+    std::condition_variable_any cv_work_;
+    std::condition_variable_any cv_drain_;
+    std::deque<TaskCommand> queue_;
+    std::atomic<bool> stop_requested_{false};
+    std::atomic<std::size_t> in_flight_{0};
+    std::vector<std::jthread> workers_;
+
+    void worker_loop(std::stop_token stoken) {
+        while (true) {
+            TaskCommand cmd;
+            {
+                std::unique_lock lock(mutex_);
+                cv_work_.wait(lock, stoken, [this]() { return !queue_.empty(); });
+                if (stoken.stop_requested() && queue_.empty()) return;
+                if (queue_.empty()) return;
+                cmd = std::move(queue_.front());
+                queue_.pop_front();
+            }
+            cmd.run();
+            in_flight_.fetch_sub(1, std::memory_order_release);
+            cv_drain_.notify_all();
+        }
+    }
+
+public:
+    explicit JThreadBackend(std::size_t worker_count = 0) {
+        if (worker_count == 0) {
+            worker_count = std::thread::hardware_concurrency();
+            if (worker_count == 0) worker_count = 1;
+        }
+        workers_.reserve(worker_count);
+        for (std::size_t i = 0; i < worker_count; ++i) {
+            workers_.emplace_back([this](std::stop_token st) { worker_loop(st); });
+        }
+    }
+
+    ~JThreadBackend() {
+        stop_requested_.store(true, std::memory_order_release);
+        for (auto& w : workers_) w.request_stop();
+        cv_work_.notify_all();
+        workers_.clear(); // joins all threads before mutex/cv destroyed
+    }
+
+    JThreadBackend(const JThreadBackend&) = delete;
+    JThreadBackend& operator=(const JThreadBackend&) = delete;
+    JThreadBackend(JThreadBackend&&) = delete;
+    JThreadBackend& operator=(JThreadBackend&&) = delete;
+
+    void submit(TaskCommand cmd) {
+        in_flight_.fetch_add(1, std::memory_order_acquire);
+        {
+            std::lock_guard lock(mutex_);
+            queue_.push_back(std::move(cmd));
+        }
+        cv_work_.notify_one();
+    }
+
+    void drain() {
+        std::unique_lock lock(mutex_);
+        cv_drain_.wait(lock, [this]() {
+            return in_flight_.load(std::memory_order_acquire) == 0 && queue_.empty();
+        });
+    }
+
+    void request_stop() noexcept {
+        stop_requested_.store(true, std::memory_order_release);
+        for (auto& w : workers_) w.request_stop();
+        cv_work_.notify_all();
+    }
+
+    [[nodiscard]] bool stopped() const noexcept {
+        return stop_requested_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::size_t worker_count() const noexcept { return workers_.size(); }
 };
 
 template <typename Backend = InlineBackend>
