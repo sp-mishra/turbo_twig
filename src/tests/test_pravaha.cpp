@@ -1235,6 +1235,16 @@ TEST_CASE("Runner policy slot - custom ReadyPolicy is used", "[pravaha][runner][
     REQUIRE(CountingReadyPolicy::ready_checks > 0);
 }
 
+TEST_CASE("Runner policy slot - default Runner compiles and runs", "[pravaha][runner][policy]") {
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() {});
+    auto b = pravaha::task("B", []() {});
+    auto expr = std::move(a) | std::move(b);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+}
+
 // ============================================================================
 // SECTION 21: Domain Constraint Validation (meta.hpp)
 // ============================================================================
