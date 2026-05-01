@@ -1391,6 +1391,58 @@ TEST_CASE("pravaha lithe frontend creates token expressions", "[pravaha][parse][
     REQUIRE(h1 == h2);
 }
 
+TEST_CASE("pravaha lithe frontend exact keyword matching", "[pravaha][parse][lithe]") {
+    using pravaha::symbolic::lithe_frontend::keyword_matches;
+    using pravaha::symbolic::lithe_frontend::is_reserved_keyword;
+
+    REQUIRE(keyword_matches("pipeline", "pipeline"));
+    REQUIRE(!keyword_matches("pipelineX", "pipeline"));
+    REQUIRE(!keyword_matches("xpipeline", "pipeline"));
+    REQUIRE(!keyword_matches("", "pipeline"));
+    REQUIRE(!keyword_matches("pipeline", ""));
+    REQUIRE(is_reserved_keyword("then"));
+    REQUIRE(!is_reserved_keyword("normal_task"));
+}
+
+TEST_CASE("pravaha lithe frontend identifier validation", "[pravaha][parse][lithe]") {
+    using pravaha::symbolic::lithe_frontend::identifier_matches;
+
+    REQUIRE(identifier_matches("a"));
+    REQUIRE(identifier_matches("load_config"));
+    REQUIRE(identifier_matches("_internal"));
+    REQUIRE(identifier_matches("task_1"));
+
+    REQUIRE(!identifier_matches(""));
+    REQUIRE(!identifier_matches("1task"));
+    REQUIRE(!identifier_matches("task-name"));
+    REQUIRE(!identifier_matches("task.name"));
+    REQUIRE(!identifier_matches("pipeline"));
+    REQUIRE(!identifier_matches("then"));
+    REQUIRE(!identifier_matches("parallel"));
+    REQUIRE(!identifier_matches("collect_all"));
+}
+
+TEST_CASE("pravaha lithe frontend captures tokens", "[pravaha][parse][lithe]") {
+    using pravaha::symbolic::lithe_frontend::capture_identifier;
+    using pravaha::symbolic::lithe_frontend::capture_keyword;
+
+    auto kw = capture_keyword("  pipeline p { }", 0, "pipeline", "pipeline_keyword");
+    REQUIRE(kw.has_value());
+    REQUIRE(kw->capture.text == "pipeline");
+    REQUIRE(kw->capture.kind == "pipeline_keyword");
+    REQUIRE(kw->lithe_hash != 0);
+    REQUIRE_FALSE(kw->lithe_dump.empty());
+
+    auto ident = capture_identifier("  startup { }", 0, "pipeline_name");
+    REQUIRE(ident.has_value());
+    REQUIRE(ident->capture.text == "startup");
+    REQUIRE(ident->capture.kind == "pipeline_name");
+
+    auto reserved = capture_identifier("  then { }", 0, "pipeline_name");
+    REQUIRE(!reserved.has_value());
+    REQUIRE(reserved.error().kind == pravaha::ErrorKind::ParseError);
+}
+
 TEST_CASE("lithe_bridge - keyword exact match", "[pravaha][parse][lithe]") {
     REQUIRE(pravaha::symbolic::lithe_bridge::keyword_matches("pipeline", "pipeline"));
     REQUIRE(!pravaha::symbolic::lithe_bridge::keyword_matches("pipelineX", "pipeline"));

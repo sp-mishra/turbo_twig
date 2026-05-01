@@ -1311,6 +1311,12 @@ struct TokenCapture {
     bool operator==(const TokenCapture&) const = default;
 };
 
+struct CapturedToken {
+    TokenCapture capture;
+    std::string lithe_dump;
+    std::size_t lithe_hash{};
+};
+
 inline auto token_expr(TokenCapture capture) {
     return lithe::make_node<token_tag>(lithe::as_expr(std::move(capture)));
 }
@@ -1329,6 +1335,113 @@ inline auto identifier_expr(std::string text, std::size_t begin, std::size_t end
 
 inline auto task_ref_expr(std::string name, std::size_t begin, std::size_t end) {
     return lithe::make_node<task_ref_tag>(identifier_expr(std::move(name), begin, end));
+}
+
+inline bool keyword_matches(std::string_view token, std::string_view keyword) {
+    return !token.empty() && !keyword.empty() && token == keyword;
+}
+
+inline bool is_pipeline_keyword(std::string_view token) {
+    return keyword_matches(token, "pipeline");
+}
+
+inline bool is_then_keyword(std::string_view token) {
+    return keyword_matches(token, "then");
+}
+
+inline bool is_parallel_keyword(std::string_view token) {
+    return keyword_matches(token, "parallel");
+}
+
+inline bool is_collect_all_keyword(std::string_view token) {
+    return keyword_matches(token, "collect_all");
+}
+
+inline bool is_reserved_keyword(std::string_view token) {
+    return is_pipeline_keyword(token)
+        || is_then_keyword(token)
+        || is_parallel_keyword(token)
+        || is_collect_all_keyword(token);
+}
+
+inline bool identifier_matches(std::string_view token) {
+    if (token.empty() || is_reserved_keyword(token)) return false;
+    if (!std::isalpha(static_cast<unsigned char>(token[0])) && token[0] != '_') return false;
+    for (const auto c : token) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') return false;
+    }
+    return true;
+}
+
+inline Outcome<CapturedToken> capture_keyword(
+    std::string_view text,
+    std::size_t offset,
+    std::string_view keyword,
+    std::string_view kind
+) {
+    if (keyword.empty()) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected non-empty keyword"});
+    }
+
+    std::size_t pos = offset;
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+    if (pos >= text.size()) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword '" + std::string(keyword) + "'"});
+    }
+
+    const std::size_t begin = pos;
+    while (pos < text.size() && !std::isspace(static_cast<unsigned char>(text[pos]))
+           && text[pos] != '{' && text[pos] != '}' && text[pos] != ',') {
+        ++pos;
+    }
+    const std::size_t end = pos;
+    const auto token = text.substr(begin, end - begin);
+
+    if (!keyword_matches(token, keyword)) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword '" + std::string(keyword) + "'"});
+    }
+
+    CapturedToken captured;
+    captured.capture = TokenCapture{std::string(kind), std::string(token), begin, end};
+    const auto expr = lithe::make_node<keyword_tag>(lithe::as_expr(std::string(token)));
+    captured.lithe_dump = lithe::emit::dump(expr);
+    captured.lithe_hash = lithe::emit::structural_hash(expr);
+    return captured;
+}
+
+inline Outcome<CapturedToken> capture_identifier(
+    std::string_view text,
+    std::size_t offset,
+    std::string_view kind
+) {
+    std::size_t pos = offset;
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+    if (pos >= text.size()) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected identifier"});
+    }
+
+    const std::size_t begin = pos;
+    while (pos < text.size() && !std::isspace(static_cast<unsigned char>(text[pos]))
+           && text[pos] != '{' && text[pos] != '}' && text[pos] != ',') {
+        ++pos;
+    }
+    const std::size_t end = pos;
+    const auto token = text.substr(begin, end - begin);
+
+    if (!identifier_matches(token)) {
+        return std::unexpected(PravahaError{ErrorKind::ParseError, "expected identifier"});
+    }
+
+    CapturedToken captured;
+    captured.capture = TokenCapture{std::string(kind), std::string(token), begin, end};
+    const auto expr = lithe::make_node<identifier_tag>(lithe::as_expr(std::string(token)));
+    captured.lithe_dump = lithe::emit::dump(expr);
+    captured.lithe_hash = lithe::emit::structural_hash(expr);
+    return captured;
 }
 
 } // namespace lithe_frontend
