@@ -587,6 +587,22 @@ TEST_CASE("any_success() - marks parallel expr with AnySuccess and updates front
     REQUIRE(any.frontend.hash != collected.frontend.hash);
 }
 
+TEST_CASE("quorum<N>() - marks parallel expr with Quorum and updates frontend", "[pravaha][dsl][lithe]") {
+    auto plain = pravaha::task("a", []{}) & pravaha::task("b", []{});
+    auto collected = pravaha::collect_all(pravaha::task("a", []{}) & pravaha::task("b", []{}));
+    auto any = pravaha::any_success(pravaha::task("a", []{}) & pravaha::task("b", []{}));
+    auto q1 = pravaha::quorum<1>(pravaha::task("a", []{}) & pravaha::task("b", []{}));
+    auto q2 = pravaha::quorum<2>(pravaha::task("a", []{}) & pravaha::task("b", []{}));
+
+    REQUIRE(q1.policy.kind == pravaha::JoinPolicyKind::Quorum);
+    REQUIRE(q1.policy.quorum_required == 1);
+    REQUIRE(q1.frontend.hash != 0);
+    REQUIRE(q1.frontend.hash != plain.frontend.hash);
+    REQUIRE(q1.frontend.hash != collected.frontend.hash);
+    REQUIRE(q1.frontend.hash != any.frontend.hash);
+    REQUIRE(q2.frontend.hash != q1.frontend.hash);
+}
+
 TEST_CASE("C++ DSL expressions carry lithe-derived frontend identity", "[pravaha][dsl][lithe]") {
     const auto e1 = pravaha::task("a", []{}) | pravaha::task("b", []{});
     REQUIRE(e1.frontend.hash != 0);

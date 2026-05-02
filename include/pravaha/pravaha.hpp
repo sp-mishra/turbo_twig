@@ -279,6 +279,7 @@ LitheFrontendMeta make_sequence_meta(std::size_t left_hash, std::size_t right_ha
 LitheFrontendMeta make_parallel_meta(std::size_t left_hash, std::size_t right_hash);
 LitheFrontendMeta make_collect_all_meta(std::size_t expr_hash);
 LitheFrontendMeta make_any_success_meta(std::size_t expr_hash);
+LitheFrontendMeta make_quorum_meta(std::size_t expr_hash, std::size_t required);
 } // namespace lithe_frontend
 } // namespace symbolic
 
@@ -360,6 +361,14 @@ template <typename L, typename R>
 [[nodiscard]] auto any_success(ParallelExpr<L, R> expr) {
     expr.policy = JoinPolicy{JoinPolicyKind::AnySuccess, 0};
     expr.frontend = symbolic::lithe_frontend::make_any_success_meta(expr.frontend.hash);
+    return expr;
+}
+
+template <std::size_t N, typename L, typename R>
+[[nodiscard]] auto quorum(ParallelExpr<L, R> expr) {
+    static_assert(N > 0);
+    expr.policy = JoinPolicy{JoinPolicyKind::Quorum, N};
+    expr.frontend = symbolic::lithe_frontend::make_quorum_meta(expr.frontend.hash, N);
     return expr;
 }
 
@@ -1370,6 +1379,7 @@ struct sequence_tag {};
 struct parallel_tag {};
 struct collect_all_tag {};
 struct any_success_tag {};
+struct quorum_tag {};
 struct keyword_tag {};
 struct identifier_tag {};
 struct token_tag {};
@@ -1434,6 +1444,11 @@ struct tag_name<pravaha::symbolic::lithe_frontend::collect_all_tag> {
 template<>
 struct tag_name<pravaha::symbolic::lithe_frontend::any_success_tag> {
     static constexpr const char* value = "pravaha.any_success";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::quorum_tag> {
+    static constexpr const char* value = "pravaha.quorum";
 };
 
 template<>
@@ -1538,6 +1553,14 @@ inline auto collect_all_expr(Expr&& expr) {
 template<class Expr>
 inline auto any_success_expr(Expr&& expr) {
     return lithe::make_node<any_success_tag>(
+        std::forward<Expr>(expr)
+    );
+}
+
+template<class Expr>
+inline auto quorum_expr(Expr&& expr, std::size_t required) {
+    return lithe::make_node<quorum_tag>(
+        lithe::as_expr(required),
         std::forward<Expr>(expr)
     );
 }
@@ -1791,6 +1814,11 @@ inline LitheFrontendMeta make_collect_all_meta(std::size_t expr_hash) {
 
 inline LitheFrontendMeta make_any_success_meta(std::size_t expr_hash) {
     const auto expr = any_success_expr(lithe::as_expr(expr_hash));
+    return make_meta(expr);
+}
+
+inline LitheFrontendMeta make_quorum_meta(std::size_t expr_hash, std::size_t required) {
+    const auto expr = quorum_expr(lithe::as_expr(expr_hash), required);
     return make_meta(expr);
 }
 
