@@ -426,7 +426,9 @@ struct IrEdge {
 
 struct IrJoinGroup {
     std::vector<TaskId> members;
-    JoinPolicyKind policy{JoinPolicyKind::AllOrNothing};
+    JoinPolicy policy{};
+    std::size_t frontend_hash{};
+    std::string frontend_dump;
 };
 
 struct TaskIr {
@@ -445,8 +447,9 @@ struct TaskIr {
     void add_edge(TaskId from, TaskId to, EdgeKind kind) {
         edges.emplace_back(from, to, kind);
     }
-    void add_join_group(std::vector<TaskId> members, JoinPolicyKind policy) {
-        join_groups.push_back(IrJoinGroup{std::move(members), policy});
+    void add_join_group(std::vector<TaskId> members, JoinPolicy policy,
+        std::size_t frontend_hash = 0, std::string frontend_dump = {}) {
+        join_groups.push_back(IrJoinGroup{std::move(members), policy, frontend_hash, std::move(frontend_dump)});
     }
     [[nodiscard]] std::size_t node_count() const noexcept { return nodes.size(); }
     [[nodiscard]] std::size_t edge_count() const noexcept { return edges.size(); }
@@ -558,7 +561,6 @@ LowerResult lower_impl(SequenceExpr<L, R> expr) {
 
 template <typename L, typename R>
 LowerResult lower_impl(ParallelExpr<L, R> expr) {
-    JoinPolicyKind policy = expr.policy.kind;
     const symbolic::LitheSymbolicSource group_source{expr.frontend, "dsl.parallel"};
     (void)group_source;
     auto left_result = lower_impl(std::move(expr.left));
@@ -568,13 +570,10 @@ LowerResult lower_impl(ParallelExpr<L, R> expr) {
     auto right_remap = merge_into(left_result, std::move(right_result));
     for (auto s : right_remap.starts) left_result.starts.push_back(s);
     for (auto t : right_remap.terminals) left_result.terminals.push_back(t);
-    // Record join group if CollectAll
-    if (policy == JoinPolicyKind::CollectAll) {
-        std::vector<TaskId> members;
-        for (auto t : left_terminals) members.push_back(t);
-        for (auto t : right_remap.terminals) members.push_back(t);
-        left_result.ir.add_join_group(std::move(members), policy);
-    }
+    std::vector<TaskId> members;
+    for (auto t : left_terminals) members.push_back(t);
+    for (auto t : right_remap.terminals) members.push_back(t);
+    left_result.ir.add_join_group(std::move(members), expr.policy, expr.frontend.hash, expr.frontend.dump);
     return left_result;
 }
 
@@ -583,6 +582,23 @@ LowerResult lower_impl(ParallelExpr<L, R> expr) {
 template <IsPravahaExpr Expr>
 Outcome<TaskIr> lower_to_ir(Expr&& expr) {
     auto result = detail::lower_impl(std::move(expr));
+    for (const auto& group : result.ir.join_groups) {
+        if (group.policy.kind != JoinPolicyKind::Quorum) {
+            continue;
+        }
+        if (group.policy.quorum_required == 0) {
+            return std::unexpected(PravahaError{
+                ErrorKind::ValidationError,
+                "Quorum policy requires quorum_required > 0"
+            });
+        }
+        if (group.policy.quorum_required > group.members.size()) {
+            return std::unexpected(PravahaError{
+                ErrorKind::ValidationError,
+                "Quorum policy requires quorum_required <= branch_count"
+            });
+        }
+    }
     return std::move(result.ir);
 }
 
@@ -802,7 +818,7 @@ struct RuntimeState {
         if (!join_groups) return false;
         TaskId tid{idx};
         for (const auto& jg : *join_groups) {
-            if (jg.policy != JoinPolicyKind::CollectAll) continue;
+            if (jg.policy.kind != JoinPolicyKind::CollectAll) continue;
             for (const auto& m : jg.members) {
                 if (m == tid) return true;
             }

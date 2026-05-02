@@ -761,6 +761,50 @@ TEST_CASE("lower_to_ir - Outcome<Unit> payload metadata unwraps to Unit", "[prav
     REQUIRE(result->nodes[0].payload_meta.output_type_name == std::string(meta::type_name<pravaha::Unit>()));
 }
 
+TEST_CASE("lower_to_ir - parallel join group policy defaults to AllOrNothing", "[pravaha][ir][policy]") {
+    auto expr = pravaha::task("a", []() {}) & pravaha::task("b", []() {});
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->join_groups.size() == 1);
+    REQUIRE(result->join_groups[0].members.size() == 2);
+    REQUIRE(result->join_groups[0].policy.kind == pravaha::JoinPolicyKind::AllOrNothing);
+    REQUIRE(result->join_groups[0].policy.quorum_required == 0);
+}
+
+TEST_CASE("lower_to_ir - collect_all parallel join group policy is CollectAll", "[pravaha][ir][policy]") {
+    auto expr = pravaha::collect_all(pravaha::task("a", []() {}) & pravaha::task("b", []() {}));
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->join_groups.size() == 1);
+    REQUIRE(result->join_groups[0].policy.kind == pravaha::JoinPolicyKind::CollectAll);
+    REQUIRE(result->join_groups[0].policy.quorum_required == 0);
+}
+
+TEST_CASE("lower_to_ir - any_success parallel join group policy is AnySuccess", "[pravaha][ir][policy]") {
+    auto expr = pravaha::any_success(pravaha::task("a", []() {}) & pravaha::task("b", []() {}));
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->join_groups.size() == 1);
+    REQUIRE(result->join_groups[0].policy.kind == pravaha::JoinPolicyKind::AnySuccess);
+    REQUIRE(result->join_groups[0].policy.quorum_required == 0);
+}
+
+TEST_CASE("lower_to_ir - quorum parallel join group policy preserves quorum_required", "[pravaha][ir][policy]") {
+    auto expr = pravaha::quorum<1>(pravaha::task("a", []() {}) & pravaha::task("b", []() {}));
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->join_groups.size() == 1);
+    REQUIRE(result->join_groups[0].policy.kind == pravaha::JoinPolicyKind::Quorum);
+    REQUIRE(result->join_groups[0].policy.quorum_required == 1);
+}
+
+TEST_CASE("lower_to_ir - quorum larger than branch count fails validation", "[pravaha][ir][policy]") {
+    auto expr = pravaha::quorum<3>(pravaha::task("a", []() {}) & pravaha::task("b", []() {}));
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(!result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::ValidationError);
+}
+
 // ============================================================================
 // SECTION 15: LiteGraph Validation Layer
 // ============================================================================
