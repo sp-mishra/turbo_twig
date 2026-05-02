@@ -1601,11 +1601,13 @@ TEST_CASE("parse_pipeline root frontend identity is stable and order-sensitive",
 
     const auto seq_ab_1 = pravaha::parse_pipeline("pipeline p { a then b }");
     const auto seq_ab_2 = pravaha::parse_pipeline("pipeline p { a then b }");
+    const auto seq_ab_other_name = pravaha::parse_pipeline("pipeline q { a then b }");
     const auto seq_ba = pravaha::parse_pipeline("pipeline p { b then a }");
     const auto par_ab = pravaha::parse_pipeline("pipeline p { parallel { a, b } }");
 
     REQUIRE(seq_ab_1.has_value());
     REQUIRE(seq_ab_2.has_value());
+    REQUIRE(seq_ab_other_name.has_value());
     REQUIRE(seq_ba.has_value());
     REQUIRE(par_ab.has_value());
 
@@ -1618,6 +1620,12 @@ TEST_CASE("parse_pipeline root frontend identity is stable and order-sensitive",
     REQUIRE(seq_root_1.hash == seq_root_2.hash);
     REQUIRE(seq_root_1.hash != seq_root_ba.hash);
     REQUIRE(seq_root_1.hash != par_root.hash);
+
+    REQUIRE(seq_ab_1->frontend.hash != 0);
+    REQUIRE_FALSE(seq_ab_1->frontend.dump.empty());
+    REQUIRE(seq_ab_1->frontend.hash == seq_ab_2->frontend.hash);
+    REQUIRE(seq_ab_1->frontend.hash != seq_ab_other_name->frontend.hash);
+    REQUIRE(seq_ab_1->frontend.hash != seq_ba->frontend.hash);
 }
 
 TEST_CASE("parse_pipeline uses lithe frontend header", "[pravaha][parse][lithe]") {

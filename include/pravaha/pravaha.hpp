@@ -1749,20 +1749,18 @@ inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr
         }
 
         auto first_meta = make_frontend_meta_for_symbolic_expr(par.branches.front());
-        std::size_t acc_hash = first_meta.hash;
-        std::string acc_dump = first_meta.dump;
+        auto acc_meta = first_meta;
 
         for (std::size_t i = 1; i < par.branches.size(); ++i) {
             auto next_meta = make_frontend_meta_for_symbolic_expr(par.branches[i]);
             const auto par_expr = lithe_frontend::parallel_expr(
-                lithe::as_expr(acc_hash),
+                lithe::as_expr(acc_meta.hash),
                 lithe::as_expr(next_meta.hash)
             );
-            acc_dump = lithe::emit::dump(par_expr);
-            acc_hash = lithe::emit::structural_hash(par_expr);
+            acc_meta = lithe_frontend::make_meta(par_expr);
         }
 
-        return LitheFrontendMeta{std::move(acc_dump), acc_hash};
+        return acc_meta;
     }
 
     return {};
@@ -1849,7 +1847,7 @@ struct Parser {
             auto task_expr = lithe_frontend::task_ref_expr(std::string(consumed), begin, end);
             branches.push_back(SymbolicTaskExpr{
                 std::string(consumed),
-                LitheFrontendMeta{lithe::emit::dump(task_expr), lithe::emit::structural_hash(task_expr)},
+                lithe_frontend::make_meta(task_expr),
                 begin,
                 end
             });
@@ -1900,7 +1898,7 @@ struct Parser {
         auto task_expr = lithe_frontend::task_ref_expr(std::string(consumed), begin, end);
         return SymbolicExpr{SymbolicTaskExpr{
             std::string(consumed),
-            LitheFrontendMeta{lithe::emit::dump(task_expr), lithe::emit::structural_hash(task_expr)},
+            lithe_frontend::make_meta(task_expr),
             begin,
             end
         }};
