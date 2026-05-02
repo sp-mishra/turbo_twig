@@ -376,6 +376,8 @@ struct IrNode {
     TaskState state{TaskState::Created};
     TaskCommand command;
     PayloadMeta payload_meta;
+    std::size_t frontend_hash{};
+    std::string frontend_dump;
     IrNode() = default;
     IrNode(TaskId id_, std::string name_, ExecutionDomain dom_, TaskCommand cmd_)
         : id{id_}, name{std::move(name_)}, domain{dom_}, state{TaskState::Created}, command{std::move(cmd_)} {}
@@ -399,9 +401,12 @@ struct TaskIr {
     std::vector<IrEdge> edges;
     std::vector<IrJoinGroup> join_groups;
 
-    TaskId add_node(std::string name, ExecutionDomain domain, TaskCommand cmd) {
+    TaskId add_node(std::string name, ExecutionDomain domain, TaskCommand cmd,
+        std::size_t frontend_hash = 0, std::string frontend_dump = {}) {
         TaskId id{nodes.size()};
         nodes.emplace_back(id, std::move(name), domain, std::move(cmd));
+        nodes.back().frontend_hash = frontend_hash;
+        nodes.back().frontend_dump = std::move(frontend_dump);
         return id;
     }
     void add_edge(TaskId from, TaskId to, EdgeKind kind) {
@@ -490,7 +495,13 @@ template <typename F>
 LowerResult lower_impl(TaskExpr<F> expr) {
     LowerResult result;
     auto cmd = TaskCommand::make(std::move(expr.callable()), expr.name());
-    TaskId id = result.ir.add_node(expr.name(), expr.domain(), std::move(cmd));
+    TaskId id = result.ir.add_node(
+        expr.name(),
+        expr.domain(),
+        std::move(cmd),
+        expr.frontend.hash,
+        expr.frontend.dump
+    );
     using OutputT = callable_payload_t<F>;
     result.ir.nodes.back().payload_meta = make_payload_meta<OutputT>();
     result.starts.push_back(id);
@@ -897,9 +908,13 @@ inline Outcome<Unit> validate_domain_constraints(const TaskIr& ir) {
         if (node.domain == ExecutionDomain::External) {
             if (node.payload_meta.output_checked) {
                 if (!node.payload_meta.output_transferable && !node.payload_meta.output_serializable) {
+                    std::string msg = "External domain requires transferable or serializable output: " + node.payload_meta.output_type_name;
+                    if (node.frontend_hash != 0) {
+                        msg += " [frontend_hash=" + std::to_string(node.frontend_hash) + "]";
+                    }
                     return std::unexpected(PravahaError{
                         ErrorKind::DomainConstraintViolation,
-                        "External domain requires transferable or serializable output: " + node.payload_meta.output_type_name,
+                        std::move(msg),
                         node.name
                     });
                 }
@@ -2062,11 +2077,23 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
 
     if (auto* task = std::get_if<symbolic::SymbolicTaskExpr>(&expr)) {
         auto* cmd_ptr = reg.find(task->name);
-        if (!cmd_ptr) return std::unexpected(PravahaError{ErrorKind::SymbolNotFound, "Symbol not found: " + task->name, task->name});
+        if (!cmd_ptr) {
+            std::string msg = "Symbol not found: " + task->name;
+            if (task->frontend.hash != 0) {
+                msg += " [frontend_hash=" + std::to_string(task->frontend.hash) + "]";
+            }
+            return std::unexpected(PravahaError{ErrorKind::SymbolNotFound, std::move(msg), task->name});
+        }
         // Create a placeholder command that delegates to the registered one
         auto* raw = cmd_ptr;
         auto wrapper = TaskCommand::make([raw]() -> Outcome<Unit> { return raw->run(); });
-        TaskId id = ir.add_node(task->name, ExecutionDomain::CPU, std::move(wrapper));
+        TaskId id = ir.add_node(
+            task->name,
+            ExecutionDomain::CPU,
+            std::move(wrapper),
+            task->frontend.hash,
+            task->frontend.dump
+        );
         starts.push_back(id);
         terminals.push_back(id);
         return Unit{};

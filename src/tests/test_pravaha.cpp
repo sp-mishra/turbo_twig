@@ -664,6 +664,15 @@ TEST_CASE("lower_to_ir - commands are runnable after lowering", "[pravaha][ir]")
     REQUIRE(counter == 1);
 }
 
+TEST_CASE("lower_to_ir - C++ DSL task propagates frontend diagnostics", "[pravaha][ir][frontend]") {
+    auto expr = pravaha::task("diag_task", []() {});
+    auto ir_result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(ir_result.has_value());
+    REQUIRE(ir_result->nodes.size() == 1);
+    REQUIRE(ir_result->nodes[0].frontend_hash != 0);
+    REQUIRE_FALSE(ir_result->nodes[0].frontend_dump.empty());
+}
+
 TEST_CASE("lower_to_ir - Outcome<Unit> payload metadata unwraps to Unit", "[pravaha][ir][payload]") {
     auto a = pravaha::task("a", []() -> pravaha::Outcome<pravaha::Unit> { return pravaha::Unit{}; });
     auto result = pravaha::lower_to_ir(std::move(a));
@@ -1954,6 +1963,23 @@ TEST_CASE("parse_pipeline - same dependency shape as C++ DSL", "[pravaha][parse]
     REQUIRE(ir.node_count() == 4);
     // Edges: a->b, a->c (from parallel), b->d, c->d
     REQUIRE(ir.edge_count() == 4);
+}
+
+TEST_CASE("lower_symbolic_pipeline - textual symbolic tasks propagate frontend diagnostics", "[pravaha][parse][frontend]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { a then b }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_command("a", pravaha::TaskCommand::make([](){}));
+    reg.register_command("b", pravaha::TaskCommand::make([](){}));
+
+    auto ir_result = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir_result.has_value());
+    REQUIRE(ir_result->nodes.size() == 2);
+    for (const auto& n : ir_result->nodes) {
+        REQUIRE(n.frontend_hash != 0);
+        REQUIRE_FALSE(n.frontend_dump.empty());
+    }
 }
 
 TEST_CASE("parse_pipeline - invalid syntax returns ParseError", "[pravaha][parse]") {
