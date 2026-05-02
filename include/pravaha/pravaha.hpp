@@ -92,6 +92,11 @@ enum class TaskState { Created, Ready, Scheduled, Running, Succeeded, Failed, Ca
 enum class JoinPolicyKind { AllOrNothing, CollectAll, AnySuccess, Quorum };
 enum class ExecutionDomain { Inline, CPU, IO, Fiber, Coroutine, External };
 
+struct JoinPolicy {
+    JoinPolicyKind kind{JoinPolicyKind::AllOrNothing};
+    std::size_t quorum_required{0};
+};
+
 // ============================================================================
 //  SECTION 3: PAYLOAD CONCEPTS
 // ============================================================================
@@ -316,9 +321,9 @@ struct SequenceExpr {
 
 template <typename L, typename R>
 struct ParallelExpr {
-    L left; R right; JoinPolicyKind policy;
+    L left; R right; JoinPolicy policy{};
     symbolic::LitheFrontendMeta frontend;
-    ParallelExpr(L l, R r, JoinPolicyKind p = JoinPolicyKind::AllOrNothing)
+    ParallelExpr(L l, R r, JoinPolicy p = JoinPolicy{})
         : left{std::move(l)}, right{std::move(r)}, policy{p},
           frontend{symbolic::lithe_frontend::make_parallel_meta(left.frontend.hash, right.frontend.hash)} {}
 };
@@ -345,7 +350,7 @@ template <IsPravahaExpr L, IsPravahaExpr R>
 
 template <typename L, typename R>
 [[nodiscard]] auto collect_all(ParallelExpr<L, R> expr) {
-    expr.policy = JoinPolicyKind::CollectAll;
+    expr.policy = JoinPolicy{JoinPolicyKind::CollectAll, 0};
     expr.frontend = symbolic::lithe_frontend::make_collect_all_meta(expr.frontend.hash);
     return expr;
 }
@@ -536,7 +541,7 @@ LowerResult lower_impl(SequenceExpr<L, R> expr) {
 
 template <typename L, typename R>
 LowerResult lower_impl(ParallelExpr<L, R> expr) {
-    JoinPolicyKind policy = expr.policy;
+    JoinPolicyKind policy = expr.policy.kind;
     const symbolic::LitheSymbolicSource group_source{expr.frontend, "dsl.parallel"};
     (void)group_source;
     auto left_result = lower_impl(std::move(expr.left));

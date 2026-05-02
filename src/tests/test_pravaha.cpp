@@ -161,6 +161,16 @@ TEST_CASE("JoinPolicyKind values", "[pravaha][policy]") {
     STATIC_REQUIRE(pravaha::JoinPolicyKind::AnySuccess != pravaha::JoinPolicyKind::Quorum);
 }
 
+TEST_CASE("JoinPolicy data model", "[pravaha][policy]") {
+    const pravaha::JoinPolicy any_success{pravaha::JoinPolicyKind::AnySuccess, 0};
+    REQUIRE(any_success.kind == pravaha::JoinPolicyKind::AnySuccess);
+    REQUIRE(any_success.quorum_required == 0);
+
+    const pravaha::JoinPolicy quorum{pravaha::JoinPolicyKind::Quorum, 2};
+    REQUIRE(quorum.kind == pravaha::JoinPolicyKind::Quorum);
+    REQUIRE(quorum.quorum_required == 2);
+}
+
 TEST_CASE("ExecutionDomain values", "[pravaha][domain]") {
     auto domains = std::array{
         pravaha::ExecutionDomain::Inline, pravaha::ExecutionDomain::CPU,
@@ -560,9 +570,9 @@ TEST_CASE("collect_all() - marks parallel expr with CollectAll", "[pravaha][dsl]
     auto a = pravaha::task("a", [](){});
     auto b = pravaha::task("b", [](){});
     auto par = std::move(a) & std::move(b);
-    REQUIRE(par.policy == pravaha::JoinPolicyKind::AllOrNothing);
+    REQUIRE(par.policy.kind == pravaha::JoinPolicyKind::AllOrNothing);
     auto collected = pravaha::collect_all(std::move(par));
-    REQUIRE(collected.policy == pravaha::JoinPolicyKind::CollectAll);
+    REQUIRE(collected.policy.kind == pravaha::JoinPolicyKind::CollectAll);
 }
 
 TEST_CASE("C++ DSL expressions carry lithe-derived frontend identity", "[pravaha][dsl][lithe]") {
