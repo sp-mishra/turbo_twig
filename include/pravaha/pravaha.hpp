@@ -1439,6 +1439,9 @@ struct LitheFrontendMeta;
 
 namespace lithe_frontend {
 
+template<class Expr>
+inline LitheFrontendMeta make_meta(const Expr& expr);
+
 struct CapturedToken {
     TokenCapture capture;
     std::string lithe_dump;
@@ -1591,8 +1594,9 @@ inline Outcome<CapturedToken> capture_keyword(
     CapturedToken captured;
     captured.capture = TokenCapture{std::string(kind), std::string(token), begin, end};
     const auto expr = lithe::make_node<keyword_tag>(lithe::as_expr(std::string(token)));
-    captured.lithe_dump = lithe::emit::dump(expr);
-    captured.lithe_hash = lithe::emit::structural_hash(expr);
+    const auto meta = make_meta(expr);
+    captured.lithe_dump = meta.dump;
+    captured.lithe_hash = meta.hash;
     return captured;
 }
 
@@ -1624,8 +1628,9 @@ inline Outcome<CapturedToken> capture_identifier(
     CapturedToken captured;
     captured.capture = TokenCapture{std::string(kind), std::string(token), begin, end};
     const auto expr = lithe::make_node<identifier_tag>(lithe::as_expr(std::string(token)));
-    captured.lithe_dump = lithe::emit::dump(expr);
-    captured.lithe_hash = lithe::emit::structural_hash(expr);
+    const auto meta = make_meta(expr);
+    captured.lithe_dump = meta.dump;
+    captured.lithe_hash = meta.hash;
     return captured;
 }
 
@@ -1689,8 +1694,9 @@ inline Outcome<PipelineHeaderParse> parse_pipeline_header(std::string_view text)
     out.body_start_offset = pos + 1;
     out.pipeline_keyword = std::move(*kw);
     out.pipeline_name = std::move(*name);
-    out.lithe_dump = lithe::emit::dump(header_expr);
-    out.lithe_hash = lithe::emit::structural_hash(header_expr);
+    const auto meta = make_meta(header_expr);
+    out.lithe_dump = meta.dump;
+    out.lithe_hash = meta.hash;
     return out;
 }
 
@@ -1715,8 +1721,9 @@ inline Outcome<ParallelIntroParse> parse_parallel_intro(std::string_view text, s
     ParallelIntroParse out;
     out.body_start_offset = pos + 1;
     out.parallel_keyword = std::move(*kw);
-    out.lithe_dump = lithe::emit::dump(intro_expr);
-    out.lithe_hash = lithe::emit::structural_hash(intro_expr);
+    const auto meta = make_meta(intro_expr);
+    out.lithe_dump = meta.dump;
+    out.lithe_hash = meta.hash;
     return out;
 }
 
@@ -1802,19 +1809,20 @@ inline LitheFrontendMeta stored_frontend_meta_for_symbolic_expr(const SymbolicEx
 }
 
 inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr& expr) {
+    // Canonical path: symbolic nodes already carry Lithe-derived metadata.
+    auto stored = stored_frontend_meta_for_symbolic_expr(expr);
+    if (stored.hash != 0 && !stored.dump.empty()) {
+        return stored;
+    }
+
+    // Compatibility fallback for partially-initialized symbolic nodes.
     if (auto* task = std::get_if<SymbolicTaskExpr>(&expr)) {
-        if (task->frontend.hash != 0 && !task->frontend.dump.empty()) {
-            return task->frontend;
-        }
         const auto task_expr = lithe_frontend::task_ref_expr(task->name);
         return lithe_frontend::make_meta(task_expr);
     }
 
     if (auto* seq_ptr = std::get_if<std::unique_ptr<SymbolicSequenceExpr>>(&expr)) {
         const auto& seq = **seq_ptr;
-        if (seq.frontend.hash != 0 && !seq.frontend.dump.empty()) {
-            return seq.frontend;
-        }
         auto left_meta = make_frontend_meta_for_symbolic_expr(seq.left);
         auto right_meta = make_frontend_meta_for_symbolic_expr(seq.right);
         const auto seq_expr = lithe_frontend::sequence_expr(
@@ -1826,9 +1834,6 @@ inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr
 
     if (auto* par_ptr = std::get_if<std::unique_ptr<SymbolicParallelExpr>>(&expr)) {
         const auto& par = **par_ptr;
-        if (par.frontend.hash != 0 && !par.frontend.dump.empty()) {
-            return par.frontend;
-        }
         if (par.branches.empty()) {
             return {};
         }
