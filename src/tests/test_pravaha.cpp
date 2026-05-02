@@ -1914,6 +1914,7 @@ TEST_CASE("parse_pipeline - missing symbol returns SymbolNotFound", "[pravaha][p
     REQUIRE(!ir_result.has_value());
     REQUIRE(ir_result.error().kind == pravaha::ErrorKind::SymbolNotFound);
     REQUIRE(ir_result.error().task_identity == "b");
+    REQUIRE(ir_result.error().message.find("frontend_hash=") != std::string::npos);
 }
 
 TEST_CASE("symbolic lowering - registered task failure propagates through wrapper", "[pravaha][parse][regression]") {

@@ -261,6 +261,12 @@ struct LitheFrontendMeta {
     std::size_t hash{};
 };
 
+// Stable frontend-identity descriptor at the Lithe -> TaskIr boundary.
+struct LitheSymbolicSource {
+    LitheFrontendMeta frontend;
+    std::string debug_name;
+};
+
 namespace lithe_frontend {
 LitheFrontendMeta make_task_ref_meta(std::string_view name);
 LitheFrontendMeta make_sequence_meta(std::size_t left_hash, std::size_t right_hash);
@@ -347,6 +353,10 @@ template <typename L, typename R>
 // ============================================================================
 //  SECTION 7: TASK IR
 // ============================================================================
+// LitheSymbolicSource is the stable frontend identity boundary.
+// TaskIr remains execution IR.
+// LiteGraph remains causality graph.
+// Lithe does not own execution.
 
 struct TaskId {
     std::size_t value;
@@ -425,6 +435,11 @@ struct TaskIr {
 
 namespace detail {
 
+inline TaskId add_node_from_source(TaskIr& ir, const symbolic::LitheSymbolicSource& source,
+    ExecutionDomain domain, TaskCommand cmd) {
+    return ir.add_node(source.debug_name, domain, std::move(cmd), source.frontend.hash, source.frontend.dump);
+}
+
 template <class T>
 struct unwrap_outcome {
     using type = T;
@@ -494,14 +509,9 @@ PayloadMeta make_payload_meta() {
 template <typename F>
 LowerResult lower_impl(TaskExpr<F> expr) {
     LowerResult result;
+    const symbolic::LitheSymbolicSource source{expr.frontend, expr.name()};
     auto cmd = TaskCommand::make(std::move(expr.callable()), expr.name());
-    TaskId id = result.ir.add_node(
-        expr.name(),
-        expr.domain(),
-        std::move(cmd),
-        expr.frontend.hash,
-        expr.frontend.dump
-    );
+    TaskId id = add_node_from_source(result.ir, source, expr.domain(), std::move(cmd));
     using OutputT = callable_payload_t<F>;
     result.ir.nodes.back().payload_meta = make_payload_meta<OutputT>();
     result.starts.push_back(id);
@@ -511,6 +521,8 @@ LowerResult lower_impl(TaskExpr<F> expr) {
 
 template <typename L, typename R>
 LowerResult lower_impl(SequenceExpr<L, R> expr) {
+    const symbolic::LitheSymbolicSource group_source{expr.frontend, "dsl.sequence"};
+    (void)group_source;
     auto left_result = lower_impl(std::move(expr.left));
     auto right_result = lower_impl(std::move(expr.right));
     auto right_remap = merge_into(left_result, std::move(right_result));
@@ -524,6 +536,8 @@ LowerResult lower_impl(SequenceExpr<L, R> expr) {
 template <typename L, typename R>
 LowerResult lower_impl(ParallelExpr<L, R> expr) {
     JoinPolicyKind policy = expr.policy;
+    const symbolic::LitheSymbolicSource group_source{expr.frontend, "dsl.parallel"};
+    (void)group_source;
     auto left_result = lower_impl(std::move(expr.left));
     auto right_result = lower_impl(std::move(expr.right));
     // Capture left terminals before merge (they are the left branch members)
@@ -2076,24 +2090,19 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
     TaskIr& ir, std::vector<TaskId>& starts, std::vector<TaskId>& terminals) {
 
     if (auto* task = std::get_if<symbolic::SymbolicTaskExpr>(&expr)) {
+        const symbolic::LitheSymbolicSource source{task->frontend, task->name};
         auto* cmd_ptr = reg.find(task->name);
         if (!cmd_ptr) {
             std::string msg = "Symbol not found: " + task->name;
-            if (task->frontend.hash != 0) {
-                msg += " [frontend_hash=" + std::to_string(task->frontend.hash) + "]";
+            if (source.frontend.hash != 0) {
+                msg += " [frontend_hash=" + std::to_string(source.frontend.hash) + "]";
             }
             return std::unexpected(PravahaError{ErrorKind::SymbolNotFound, std::move(msg), task->name});
         }
         // Create a placeholder command that delegates to the registered one
         auto* raw = cmd_ptr;
         auto wrapper = TaskCommand::make([raw]() -> Outcome<Unit> { return raw->run(); });
-        TaskId id = ir.add_node(
-            task->name,
-            ExecutionDomain::CPU,
-            std::move(wrapper),
-            task->frontend.hash,
-            task->frontend.dump
-        );
+        TaskId id = add_node_from_source(ir, source, ExecutionDomain::CPU, std::move(wrapper));
         starts.push_back(id);
         terminals.push_back(id);
         return Unit{};
@@ -2101,6 +2110,8 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
 
     if (auto* seq_ptr = std::get_if<std::unique_ptr<symbolic::SymbolicSequenceExpr>>(&expr)) {
         auto& seq = **seq_ptr;
+        const symbolic::LitheSymbolicSource group_source{seq.frontend, "symbolic.sequence"};
+        (void)group_source;
         std::vector<TaskId> left_starts, left_terminals, right_starts, right_terminals;
         auto lr = lower_symbolic_expr(seq.left, reg, ir, left_starts, left_terminals);
         if (!lr.has_value()) return lr;
@@ -2114,6 +2125,8 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
 
     if (auto* par_ptr = std::get_if<std::unique_ptr<symbolic::SymbolicParallelExpr>>(&expr)) {
         auto& par = **par_ptr;
+        const symbolic::LitheSymbolicSource group_source{par.frontend, "symbolic.parallel"};
+        (void)group_source;
         for (auto& branch : par.branches) {
             std::vector<TaskId> bs, bt;
             auto br = lower_symbolic_expr(branch, reg, ir, bs, bt);
