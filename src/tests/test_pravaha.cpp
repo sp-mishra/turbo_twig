@@ -1423,7 +1423,7 @@ TEST_CASE("pravaha lithe frontend canonical symbolic builders", "[pravaha][parse
     REQUIRE(seq_meta.hash != seq_ba_meta.hash);
 
     const auto par_meta = make_meta(par_ab);
-    REQUIRE(seq_meta.dump != par_meta.dump);
+    REQUIRE(seq_meta.hash != par_meta.hash);
 }
 
 TEST_CASE("pravaha lithe frontend keyword matching", "[pravaha][parse][lithe]") {
@@ -1594,6 +1594,32 @@ TEST_CASE("parse_pipeline produces lithe frontend metadata", "[pravaha][parse][l
     REQUIRE_FALSE(root_meta.dump.empty());
 }
 
+TEST_CASE("parse_pipeline root frontend identity is stable and order-sensitive", "[pravaha][parse][lithe][identity]") {
+    const auto single = pravaha::parse_pipeline("pipeline p { a }");
+    REQUIRE(single.has_value());
+    REQUIRE(single->frontend.hash != 0);
+
+    const auto seq_ab_1 = pravaha::parse_pipeline("pipeline p { a then b }");
+    const auto seq_ab_2 = pravaha::parse_pipeline("pipeline p { a then b }");
+    const auto seq_ba = pravaha::parse_pipeline("pipeline p { b then a }");
+    const auto par_ab = pravaha::parse_pipeline("pipeline p { parallel { a, b } }");
+
+    REQUIRE(seq_ab_1.has_value());
+    REQUIRE(seq_ab_2.has_value());
+    REQUIRE(seq_ba.has_value());
+    REQUIRE(par_ab.has_value());
+
+    const auto seq_root_1 = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ab_1->root);
+    const auto seq_root_2 = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ab_2->root);
+    const auto seq_root_ba = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ba->root);
+    const auto par_root = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(par_ab->root);
+
+    REQUIRE(seq_root_1.hash != 0);
+    REQUIRE(seq_root_1.hash == seq_root_2.hash);
+    REQUIRE(seq_root_1.hash != seq_root_ba.hash);
+    REQUIRE(seq_root_1.hash != par_root.hash);
+}
+
 TEST_CASE("parse_pipeline uses lithe frontend header", "[pravaha][parse][lithe]") {
     {
         auto result = pravaha::parse_pipeline("pipeline p { a then b }");
@@ -1715,7 +1741,7 @@ TEST_CASE("lithe frontend structural hash is stable", "[pravaha][parse][lithe]")
     REQUIRE_FALSE(seq_meta_1.dump.empty());
     REQUIRE(seq_meta_1.hash == seq_meta_2.hash);
     REQUIRE(seq_meta_1.hash != seq_meta_ba.hash);
-    REQUIRE(seq_meta_1.dump != par_meta.dump);
+    REQUIRE(seq_meta_1.hash != par_meta.hash);
 }
 
 TEST_CASE("reserved textual keywords are rejected as task identifiers", "[pravaha][parse][lithe]") {

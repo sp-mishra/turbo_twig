@@ -1676,7 +1676,11 @@ namespace lithe_frontend {
 
 template<class Expr>
 inline LitheFrontendMeta make_meta(const Expr& expr) {
-    return LitheFrontendMeta{lithe::emit::dump(expr), lithe::emit::structural_hash(expr)};
+    auto meta = LitheFrontendMeta{lithe::emit::dump(expr), lithe::emit::structural_hash(expr)};
+    // Mix dump-derived entropy so runtime identity stays sensitive to canonical Lithe shape.
+    const auto dump_hash = std::hash<std::string>{}(meta.dump);
+    meta.hash ^= (dump_hash + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    return meta;
 }
 
 } // namespace lithe_frontend
