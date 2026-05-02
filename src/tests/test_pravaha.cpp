@@ -1611,6 +1611,18 @@ TEST_CASE("parse_pipeline root frontend identity is stable and order-sensitive",
     REQUIRE(seq_ba.has_value());
     REQUIRE(par_ab.has_value());
 
+    const auto* seq_node = std::get_if<std::unique_ptr<pravaha::symbolic::SymbolicSequenceExpr>>(&seq_ab_1->root);
+    REQUIRE(seq_node != nullptr);
+    REQUIRE(*seq_node != nullptr);
+    REQUIRE((**seq_node).frontend.hash != 0);
+    REQUIRE_FALSE((**seq_node).frontend.dump.empty());
+
+    const auto* par_node = std::get_if<std::unique_ptr<pravaha::symbolic::SymbolicParallelExpr>>(&par_ab->root);
+    REQUIRE(par_node != nullptr);
+    REQUIRE(*par_node != nullptr);
+    REQUIRE((**par_node).frontend.hash != 0);
+    REQUIRE_FALSE((**par_node).frontend.dump.empty());
+
     const auto seq_root_1 = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ab_1->root);
     const auto seq_root_2 = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ab_2->root);
     const auto seq_root_ba = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(seq_ba->root);

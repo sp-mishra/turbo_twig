@@ -1716,6 +1716,21 @@ struct SymbolicPipeline {
     LitheFrontendMeta frontend;
 };
 
+inline LitheFrontendMeta stored_frontend_meta_for_symbolic_expr(const SymbolicExpr& expr) {
+    if (auto* task = std::get_if<SymbolicTaskExpr>(&expr)) {
+        return task->frontend;
+    }
+    if (auto* seq_ptr = std::get_if<std::unique_ptr<SymbolicSequenceExpr>>(&expr)) {
+        if (*seq_ptr) return (*seq_ptr)->frontend;
+        return {};
+    }
+    if (auto* par_ptr = std::get_if<std::unique_ptr<SymbolicParallelExpr>>(&expr)) {
+        if (*par_ptr) return (*par_ptr)->frontend;
+        return {};
+    }
+    return {};
+}
+
 inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr& expr) {
     if (auto* task = std::get_if<SymbolicTaskExpr>(&expr)) {
         if (task->frontend.hash != 0 && !task->frontend.dump.empty()) {
@@ -1853,12 +1868,22 @@ struct Parser {
             });
         }
         if (branches.empty()) return std::unexpected(PravahaError{ErrorKind::ParseError, "Empty parallel block"});
+
+        auto first_meta = stored_frontend_meta_for_symbolic_expr(branches.front());
+        auto par_meta = first_meta;
+        for (std::size_t i = 1; i < branches.size(); ++i) {
+            const auto next_meta = stored_frontend_meta_for_symbolic_expr(branches[i]);
+            const auto par_expr = lithe_frontend::parallel_expr(
+                lithe::as_expr(par_meta.hash),
+                lithe::as_expr(next_meta.hash)
+            );
+            par_meta = lithe_frontend::make_meta(par_expr);
+        }
+
         auto par = std::make_unique<SymbolicParallelExpr>();
         par->branches = std::move(branches);
+        par->frontend = std::move(par_meta);
         SymbolicExpr result{std::move(par)};
-        if (auto* par_ptr = std::get_if<std::unique_ptr<SymbolicParallelExpr>>(&result)) {
-            (*par_ptr)->frontend = make_frontend_meta_for_symbolic_expr(result);
-        }
         return result;
     }
 
@@ -1918,10 +1943,14 @@ struct Parser {
             auto seq = std::make_unique<SymbolicSequenceExpr>();
             seq->left = std::move(current);
             seq->right = std::move(next.value());
+            const auto left_meta = stored_frontend_meta_for_symbolic_expr(seq->left);
+            const auto right_meta = stored_frontend_meta_for_symbolic_expr(seq->right);
+            const auto seq_expr = lithe_frontend::sequence_expr(
+                lithe::as_expr(left_meta.hash),
+                lithe::as_expr(right_meta.hash)
+            );
+            seq->frontend = lithe_frontend::make_meta(seq_expr);
             current = SymbolicExpr{std::move(seq)};
-            if (auto* seq_ptr = std::get_if<std::unique_ptr<SymbolicSequenceExpr>>(&current)) {
-                (*seq_ptr)->frontend = make_frontend_meta_for_symbolic_expr(current);
-            }
         }
         return current;
     }
@@ -1936,7 +1965,7 @@ struct Parser {
         if (!expect("}")) return std::unexpected(PravahaError{ErrorKind::ParseError, "Expected '}'"});
 
         auto root = std::move(body.value());
-        auto root_meta = make_frontend_meta_for_symbolic_expr(root);
+        const auto root_meta = stored_frontend_meta_for_symbolic_expr(root);
         const auto pipeline_expr = lithe_frontend::pipeline_expr(
             header->name,
             lithe::as_expr(root_meta.hash)
