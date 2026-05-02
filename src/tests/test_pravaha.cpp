@@ -565,6 +565,24 @@ TEST_CASE("collect_all() - marks parallel expr with CollectAll", "[pravaha][dsl]
     REQUIRE(collected.policy == pravaha::JoinPolicyKind::CollectAll);
 }
 
+TEST_CASE("C++ DSL expressions carry lithe-derived frontend identity", "[pravaha][dsl][lithe]") {
+    const auto e1 = pravaha::task("a", []{}) | pravaha::task("b", []{});
+    REQUIRE(e1.frontend.hash != 0);
+    REQUIRE_FALSE(e1.frontend.dump.empty());
+
+    const auto e1_same = pravaha::task("a", []{}) | pravaha::task("b", []{});
+    REQUIRE(e1.frontend.hash == e1_same.frontend.hash);
+
+    const auto e1_reversed = pravaha::task("b", []{}) | pravaha::task("a", []{});
+    REQUIRE(e1.frontend.hash != e1_reversed.frontend.hash);
+
+    const auto par = pravaha::task("a", []{}) & pravaha::task("b", []{});
+    REQUIRE(par.frontend.hash != e1.frontend.hash);
+
+    const auto collected = pravaha::collect_all(pravaha::task("a", []{}) & pravaha::task("b", []{}));
+    REQUIRE(collected.frontend.hash != par.frontend.hash);
+}
+
 // ============================================================================
 // SECTION 14: Task IR - Lowering
 // ============================================================================

@@ -255,6 +255,20 @@ public:
 //  SECTION 6: LAZY EXPRESSION DSL
 // ============================================================================
 
+namespace symbolic {
+struct LitheFrontendMeta {
+    std::string dump;
+    std::size_t hash{};
+};
+
+namespace lithe_frontend {
+LitheFrontendMeta make_task_ref_meta(std::string_view name);
+LitheFrontendMeta make_sequence_meta(std::size_t left_hash, std::size_t right_hash);
+LitheFrontendMeta make_parallel_meta(std::size_t left_hash, std::size_t right_hash);
+LitheFrontendMeta make_collect_all_meta(std::size_t expr_hash);
+} // namespace lithe_frontend
+} // namespace symbolic
+
 template <typename F> class TaskExpr;
 template <typename L, typename R> struct SequenceExpr;
 template <typename L, typename R> struct ParallelExpr;
@@ -273,8 +287,11 @@ template <typename F>
 class TaskExpr {
     std::string name_; F callable_; ExecutionDomain domain_;
 public:
+    symbolic::LitheFrontendMeta frontend;
+
     TaskExpr(std::string name, F callable, ExecutionDomain domain = ExecutionDomain::CPU)
-        : name_{std::move(name)}, callable_{std::move(callable)}, domain_{domain} {}
+        : name_{std::move(name)}, callable_{std::move(callable)}, domain_{domain},
+          frontend{symbolic::lithe_frontend::make_task_ref_meta(name_)} {}
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
     [[nodiscard]] ExecutionDomain domain() const noexcept { return domain_; }
     [[nodiscard]] const F& callable() const noexcept { return callable_; }
@@ -284,14 +301,19 @@ public:
 template <typename L, typename R>
 struct SequenceExpr {
     L left; R right;
-    SequenceExpr(L l, R r) : left{std::move(l)}, right{std::move(r)} {}
+    symbolic::LitheFrontendMeta frontend;
+    SequenceExpr(L l, R r)
+        : left{std::move(l)}, right{std::move(r)},
+          frontend{symbolic::lithe_frontend::make_sequence_meta(left.frontend.hash, right.frontend.hash)} {}
 };
 
 template <typename L, typename R>
 struct ParallelExpr {
     L left; R right; JoinPolicyKind policy;
+    symbolic::LitheFrontendMeta frontend;
     ParallelExpr(L l, R r, JoinPolicyKind p = JoinPolicyKind::AllOrNothing)
-        : left{std::move(l)}, right{std::move(r)}, policy{p} {}
+        : left{std::move(l)}, right{std::move(r)}, policy{p},
+          frontend{symbolic::lithe_frontend::make_parallel_meta(left.frontend.hash, right.frontend.hash)} {}
 };
 
 template <typename F> requires std::move_constructible<std::decay_t<F>>
@@ -315,7 +337,11 @@ template <IsPravahaExpr L, IsPravahaExpr R>
 }
 
 template <typename L, typename R>
-[[nodiscard]] auto collect_all(ParallelExpr<L, R> expr) { expr.policy = JoinPolicyKind::CollectAll; return expr; }
+[[nodiscard]] auto collect_all(ParallelExpr<L, R> expr) {
+    expr.policy = JoinPolicyKind::CollectAll;
+    expr.frontend = symbolic::lithe_frontend::make_collect_all_meta(expr.frontend.hash);
+    return expr;
+}
 
 
 // ============================================================================
@@ -1667,11 +1693,6 @@ inline Outcome<ParallelIntroParse> parse_parallel_intro(std::string_view text, s
 
 } // namespace lithe_frontend
 
-struct LitheFrontendMeta {
-    std::string dump;
-    std::size_t hash{};
-};
-
 namespace lithe_frontend {
 
 template<class Expr>
@@ -1681,6 +1702,26 @@ inline LitheFrontendMeta make_meta(const Expr& expr) {
     const auto dump_hash = std::hash<std::string>{}(meta.dump);
     meta.hash ^= (dump_hash + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
     return meta;
+}
+
+inline LitheFrontendMeta make_task_ref_meta(std::string_view name) {
+    const auto expr = task_ref_expr(std::string{name});
+    return make_meta(expr);
+}
+
+inline LitheFrontendMeta make_sequence_meta(std::size_t left_hash, std::size_t right_hash) {
+    const auto expr = sequence_expr(lithe::as_expr(left_hash), lithe::as_expr(right_hash));
+    return make_meta(expr);
+}
+
+inline LitheFrontendMeta make_parallel_meta(std::size_t left_hash, std::size_t right_hash) {
+    const auto expr = parallel_expr(lithe::as_expr(left_hash), lithe::as_expr(right_hash));
+    return make_meta(expr);
+}
+
+inline LitheFrontendMeta make_collect_all_meta(std::size_t expr_hash) {
+    const auto expr = collect_all_expr(lithe::as_expr(expr_hash));
+    return make_meta(expr);
 }
 
 } // namespace lithe_frontend
