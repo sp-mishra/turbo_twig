@@ -583,6 +583,48 @@ TEST_CASE("C++ DSL expressions carry lithe-derived frontend identity", "[pravaha
     REQUIRE(collected.frontend.hash != par.frontend.hash);
 }
 
+TEST_CASE("Lithe is canonical symbolic identity across textual and C++ DSL", "[pravaha][lithe][regression][canonical]") {
+    const auto text_seq_1 = pravaha::parse_pipeline("pipeline p { a then b }");
+    const auto text_seq_2 = pravaha::parse_pipeline("pipeline p { a then b }");
+    REQUIRE(text_seq_1.has_value());
+    REQUIRE(text_seq_2.has_value());
+
+    const auto text_seq_1_root = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(text_seq_1->root);
+    const auto text_seq_2_root = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(text_seq_2->root);
+    REQUIRE(text_seq_1_root.hash == text_seq_2_root.hash);
+    REQUIRE(text_seq_1->frontend.hash == text_seq_2->frontend.hash);
+
+    const auto text_seq_ba = pravaha::parse_pipeline("pipeline p { b then a }");
+    REQUIRE(text_seq_ba.has_value());
+    const auto text_seq_ba_root = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(text_seq_ba->root);
+    REQUIRE(text_seq_1_root.hash != text_seq_ba_root.hash);
+
+    const auto text_par = pravaha::parse_pipeline("pipeline p { parallel { a, b } }");
+    REQUIRE(text_par.has_value());
+    const auto text_par_root = pravaha::symbolic::make_frontend_meta_for_symbolic_expr(text_par->root);
+    REQUIRE(text_seq_1_root.hash != text_par_root.hash);
+
+    const auto text_name_q = pravaha::parse_pipeline("pipeline q { a }");
+    const auto text_name_p = pravaha::parse_pipeline("pipeline p { a }");
+    REQUIRE(text_name_q.has_value());
+    REQUIRE(text_name_p.has_value());
+    REQUIRE(text_name_q->frontend.hash != text_name_p->frontend.hash);
+
+    const auto cpp_seq_ab = pravaha::task("a", []{}) | pravaha::task("b", []{});
+    const auto cpp_seq_ab_2 = pravaha::task("a", []{}) | pravaha::task("b", []{});
+    const auto cpp_seq_ba = pravaha::task("b", []{}) | pravaha::task("a", []{});
+    const auto cpp_par_ab = pravaha::task("a", []{}) & pravaha::task("b", []{});
+    REQUIRE(cpp_seq_ab.frontend.hash != 0);
+    REQUIRE(cpp_seq_ab.frontend.hash == cpp_seq_ab_2.frontend.hash);
+    REQUIRE(cpp_seq_ab.frontend.hash != cpp_seq_ba.frontend.hash);
+    REQUIRE(cpp_seq_ab.frontend.hash != cpp_par_ab.frontend.hash);
+
+    REQUIRE(text_seq_1_root.hash == cpp_seq_ab.frontend.hash);
+
+    const auto cpp_collect_all_ab = pravaha::collect_all(pravaha::task("a", []{}) & pravaha::task("b", []{}));
+    REQUIRE(cpp_collect_all_ab.frontend.hash != cpp_par_ab.frontend.hash);
+}
+
 // ============================================================================
 // SECTION 14: Task IR - Lowering
 // ============================================================================
