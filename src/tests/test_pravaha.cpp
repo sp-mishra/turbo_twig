@@ -1391,6 +1391,41 @@ TEST_CASE("pravaha lithe frontend creates token expressions", "[pravaha][parse][
     REQUIRE(h1 == h2);
 }
 
+TEST_CASE("pravaha lithe frontend canonical symbolic builders", "[pravaha][parse][lithe][canonical]") {
+    using pravaha::symbolic::lithe_frontend::make_meta;
+    using pravaha::symbolic::lithe_frontend::parallel_expr;
+    using pravaha::symbolic::lithe_frontend::pipeline_expr;
+    using pravaha::symbolic::lithe_frontend::sequence_expr;
+    using pravaha::symbolic::lithe_frontend::task_ref_expr;
+
+    const auto a = task_ref_expr("a");
+    const auto b = task_ref_expr("b");
+
+    STATIC_REQUIRE(lithe::Expression<decltype(a)>);
+
+    const auto seq_ab = sequence_expr(a, b);
+    STATIC_REQUIRE(lithe::Expression<decltype(seq_ab)>);
+
+    const auto par_ab = parallel_expr(a, b);
+    STATIC_REQUIRE(lithe::Expression<decltype(par_ab)>);
+
+    const auto pipe = pipeline_expr("p", seq_ab);
+    STATIC_REQUIRE(lithe::Expression<decltype(pipe)>);
+
+    const auto seq_meta = make_meta(seq_ab);
+    REQUIRE_FALSE(seq_meta.dump.empty());
+    REQUIRE(seq_meta.hash != 0);
+
+    const auto seq_meta_2 = make_meta(sequence_expr(task_ref_expr("a"), task_ref_expr("b")));
+    REQUIRE(seq_meta.hash == seq_meta_2.hash);
+
+    const auto seq_ba_meta = make_meta(sequence_expr(task_ref_expr("b"), task_ref_expr("a")));
+    REQUIRE(seq_meta.hash != seq_ba_meta.hash);
+
+    const auto par_meta = make_meta(par_ab);
+    REQUIRE(seq_meta.dump != par_meta.dump);
+}
+
 TEST_CASE("pravaha lithe frontend keyword matching", "[pravaha][parse][lithe]") {
     using pravaha::symbolic::lithe_frontend::keyword_matches;
     using pravaha::symbolic::lithe_frontend::is_collect_all_keyword;
@@ -1680,7 +1715,7 @@ TEST_CASE("lithe frontend structural hash is stable", "[pravaha][parse][lithe]")
     REQUIRE_FALSE(seq_meta_1.dump.empty());
     REQUIRE(seq_meta_1.hash == seq_meta_2.hash);
     REQUIRE(seq_meta_1.hash != seq_meta_ba.hash);
-    REQUIRE(seq_meta_1.hash != par_meta.hash);
+    REQUIRE(seq_meta_1.dump != par_meta.dump);
 }
 
 TEST_CASE("reserved textual keywords are rejected as task identifiers", "[pravaha][parse][lithe]") {

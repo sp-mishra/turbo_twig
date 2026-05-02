@@ -1380,6 +1380,8 @@ namespace pravaha {
 
 namespace symbolic {
 
+struct LitheFrontendMeta;
+
 namespace lithe_frontend {
 
 struct CapturedToken {
@@ -1420,8 +1422,45 @@ inline auto identifier_expr(std::string text, std::size_t begin, std::size_t end
     );
 }
 
+inline auto task_ref_expr(std::string name) {
+    return lithe::make_node<task_ref_tag>(lithe::as_expr(std::move(name)));
+}
+
 inline auto task_ref_expr(std::string name, std::size_t begin, std::size_t end) {
-    return lithe::make_node<task_ref_tag>(identifier_expr(std::move(name), begin, end));
+    (void)begin;
+    (void)end;
+    return task_ref_expr(std::move(name));
+}
+
+template<class LeftExpr, class RightExpr>
+inline auto sequence_expr(LeftExpr&& left, RightExpr&& right) {
+    return lithe::make_node<sequence_tag>(
+        std::forward<LeftExpr>(left),
+        std::forward<RightExpr>(right)
+    );
+}
+
+template<class LeftExpr, class RightExpr>
+inline auto parallel_expr(LeftExpr&& left, RightExpr&& right) {
+    return lithe::make_node<parallel_tag>(
+        std::forward<LeftExpr>(left),
+        std::forward<RightExpr>(right)
+    );
+}
+
+template<class Expr>
+inline auto collect_all_expr(Expr&& expr) {
+    return lithe::make_node<collect_all_tag>(
+        std::forward<Expr>(expr)
+    );
+}
+
+template<class BodyExpr>
+inline auto pipeline_expr(std::string name, BodyExpr&& body_expr) {
+    return lithe::make_node<pipeline_tag>(
+        lithe::make_node<identifier_tag>(lithe::as_expr(std::move(name))),
+        std::forward<BodyExpr>(body_expr)
+    );
 }
 
 inline bool keyword_matches(std::string_view token, std::string_view keyword) {
@@ -1632,6 +1671,16 @@ struct LitheFrontendMeta {
     std::string dump;
     std::size_t hash{};
 };
+
+namespace lithe_frontend {
+
+template<class Expr>
+inline LitheFrontendMeta make_meta(const Expr& expr) {
+    return LitheFrontendMeta{lithe::emit::dump(expr), lithe::emit::structural_hash(expr)};
+}
+
+} // namespace lithe_frontend
+
 struct SymbolicTaskExpr {
     std::string name;
     LitheFrontendMeta frontend;
@@ -1668,8 +1717,8 @@ inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr
         if (task->frontend.hash != 0 && !task->frontend.dump.empty()) {
             return task->frontend;
         }
-        const auto task_expr = lithe_frontend::task_ref_expr(task->name, task->source_begin, task->source_end);
-        return LitheFrontendMeta{lithe::emit::dump(task_expr), lithe::emit::structural_hash(task_expr)};
+        const auto task_expr = lithe_frontend::task_ref_expr(task->name);
+        return lithe_frontend::make_meta(task_expr);
     }
 
     if (auto* seq_ptr = std::get_if<std::unique_ptr<SymbolicSequenceExpr>>(&expr)) {
@@ -1679,11 +1728,11 @@ inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr
         }
         auto left_meta = make_frontend_meta_for_symbolic_expr(seq.left);
         auto right_meta = make_frontend_meta_for_symbolic_expr(seq.right);
-        const auto seq_expr = lithe::make_node<lithe_frontend::sequence_tag>(
+        const auto seq_expr = lithe_frontend::sequence_expr(
             lithe::as_expr(left_meta.hash),
             lithe::as_expr(right_meta.hash)
         );
-        return LitheFrontendMeta{lithe::emit::dump(seq_expr), lithe::emit::structural_hash(seq_expr)};
+        return lithe_frontend::make_meta(seq_expr);
     }
 
     if (auto* par_ptr = std::get_if<std::unique_ptr<SymbolicParallelExpr>>(&expr)) {
@@ -1701,7 +1750,7 @@ inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr
 
         for (std::size_t i = 1; i < par.branches.size(); ++i) {
             auto next_meta = make_frontend_meta_for_symbolic_expr(par.branches[i]);
-            const auto par_expr = lithe::make_node<lithe_frontend::parallel_tag>(
+            const auto par_expr = lithe_frontend::parallel_expr(
                 lithe::as_expr(acc_hash),
                 lithe::as_expr(next_meta.hash)
             );
@@ -1886,15 +1935,15 @@ struct Parser {
 
         auto root = std::move(body.value());
         auto root_meta = make_frontend_meta_for_symbolic_expr(root);
-        const auto pipeline_expr = lithe::make_node<lithe_frontend::pipeline_tag>(
-            lithe::as_expr(header->lithe_hash),
+        const auto pipeline_expr = lithe_frontend::pipeline_expr(
+            header->name,
             lithe::as_expr(root_meta.hash)
         );
 
         return SymbolicPipeline{
             std::move(header->name),
             std::move(root),
-            LitheFrontendMeta{lithe::emit::dump(pipeline_expr), lithe::emit::structural_hash(pipeline_expr)}
+            lithe_frontend::make_meta(pipeline_expr)
         };
     }
 };
