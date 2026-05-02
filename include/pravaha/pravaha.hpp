@@ -16,6 +16,7 @@
 #include <deque>
 #include <exception>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -1339,10 +1340,12 @@ private:
 // ============================================================================
 //  SECTION 11: TEXTUAL PIPELINE PARSING (v0.1 bridge using Lithe)
 // ============================================================================
-// Lithe (edsl/lithe.hpp) is a compile-time expression template EDSL.
-// For v0.1, we use Lithe's SymbolicExpression/expr<> infrastructure for
-// keyword/identifier validation, and implement a minimal recursive descent
-// parser for the textual pipeline syntax.
+// For v0.1, Pravaha keeps a small runtime tokenizer/parser.
+// Lithe provides the canonical symbolic frontend identity layer:
+// task references, sequence, parallel, collect_all, and pipeline
+// structures are captured as Lithe expressions and reduced to
+// dump/hash metadata.
+// Lithe does not execute tasks and does not replace TaskIr or Runner.
 
 namespace symbolic {
 
