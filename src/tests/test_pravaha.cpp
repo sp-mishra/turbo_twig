@@ -575,6 +575,18 @@ TEST_CASE("collect_all() - marks parallel expr with CollectAll", "[pravaha][dsl]
     REQUIRE(collected.policy.kind == pravaha::JoinPolicyKind::CollectAll);
 }
 
+TEST_CASE("any_success() - marks parallel expr with AnySuccess and updates frontend", "[pravaha][dsl][lithe]") {
+    auto plain = pravaha::task("a", []{}) & pravaha::task("b", []{});
+    auto any = pravaha::any_success(pravaha::task("a", []{}) & pravaha::task("b", []{}));
+    auto collected = pravaha::collect_all(pravaha::task("a", []{}) & pravaha::task("b", []{}));
+
+    REQUIRE(any.policy.kind == pravaha::JoinPolicyKind::AnySuccess);
+    REQUIRE(any.policy.quorum_required == 0);
+    REQUIRE(any.frontend.hash != 0);
+    REQUIRE(any.frontend.hash != plain.frontend.hash);
+    REQUIRE(any.frontend.hash != collected.frontend.hash);
+}
+
 TEST_CASE("C++ DSL expressions carry lithe-derived frontend identity", "[pravaha][dsl][lithe]") {
     const auto e1 = pravaha::task("a", []{}) | pravaha::task("b", []{});
     REQUIRE(e1.frontend.hash != 0);

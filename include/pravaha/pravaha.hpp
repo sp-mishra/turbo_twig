@@ -278,6 +278,7 @@ LitheFrontendMeta make_task_ref_meta(std::string_view name);
 LitheFrontendMeta make_sequence_meta(std::size_t left_hash, std::size_t right_hash);
 LitheFrontendMeta make_parallel_meta(std::size_t left_hash, std::size_t right_hash);
 LitheFrontendMeta make_collect_all_meta(std::size_t expr_hash);
+LitheFrontendMeta make_any_success_meta(std::size_t expr_hash);
 } // namespace lithe_frontend
 } // namespace symbolic
 
@@ -352,6 +353,13 @@ template <typename L, typename R>
 [[nodiscard]] auto collect_all(ParallelExpr<L, R> expr) {
     expr.policy = JoinPolicy{JoinPolicyKind::CollectAll, 0};
     expr.frontend = symbolic::lithe_frontend::make_collect_all_meta(expr.frontend.hash);
+    return expr;
+}
+
+template <typename L, typename R>
+[[nodiscard]] auto any_success(ParallelExpr<L, R> expr) {
+    expr.policy = JoinPolicy{JoinPolicyKind::AnySuccess, 0};
+    expr.frontend = symbolic::lithe_frontend::make_any_success_meta(expr.frontend.hash);
     return expr;
 }
 
@@ -1361,6 +1369,7 @@ struct task_ref_tag {};
 struct sequence_tag {};
 struct parallel_tag {};
 struct collect_all_tag {};
+struct any_success_tag {};
 struct keyword_tag {};
 struct identifier_tag {};
 struct token_tag {};
@@ -1420,6 +1429,11 @@ struct tag_name<pravaha::symbolic::lithe_frontend::parallel_tag> {
 template<>
 struct tag_name<pravaha::symbolic::lithe_frontend::collect_all_tag> {
     static constexpr const char* value = "pravaha.collect_all";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::any_success_tag> {
+    static constexpr const char* value = "pravaha.any_success";
 };
 
 template<>
@@ -1517,6 +1531,13 @@ inline auto parallel_expr(LeftExpr&& left, RightExpr&& right) {
 template<class Expr>
 inline auto collect_all_expr(Expr&& expr) {
     return lithe::make_node<collect_all_tag>(
+        std::forward<Expr>(expr)
+    );
+}
+
+template<class Expr>
+inline auto any_success_expr(Expr&& expr) {
+    return lithe::make_node<any_success_tag>(
         std::forward<Expr>(expr)
     );
 }
@@ -1765,6 +1786,11 @@ inline LitheFrontendMeta make_parallel_meta(std::size_t left_hash, std::size_t r
 
 inline LitheFrontendMeta make_collect_all_meta(std::size_t expr_hash) {
     const auto expr = collect_all_expr(lithe::as_expr(expr_hash));
+    return make_meta(expr);
+}
+
+inline LitheFrontendMeta make_any_success_meta(std::size_t expr_hash) {
+    const auto expr = any_success_expr(lithe::as_expr(expr_hash));
     return make_meta(expr);
 }
 
