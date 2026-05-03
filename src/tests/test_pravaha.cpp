@@ -2491,7 +2491,7 @@ TEST_CASE("parse_pipeline - rejects reserved identifier then", "[pravaha][parse]
 // SECTION 23: parallel_reduce (NAryTree hierarchy)
 // ============================================================================
 
-TEST_CASE("parallel_reduce is currently eager", "[pravaha][reduce]") {
+TEST_CASE("parallel_reduce_eager executes immediately", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4};
     std::atomic<int> calls{0};
     pravaha::Runner<> runner;
@@ -2512,6 +2512,28 @@ TEST_CASE("parallel_reduce is currently eager", "[pravaha][reduce]") {
 
     REQUIRE(result.has_value());
     REQUIRE(calls.load() > 0);
+}
+
+TEST_CASE("parallel_reduce construction does not execute", "[pravaha][reduce][lazy]") {
+    std::vector<int> data = {1, 2, 3, 4};
+    std::atomic<int> calls{0};
+
+    auto expr = pravaha::parallel_reduce(
+        data,
+        0,
+        [&calls](int x) {
+            calls.fetch_add(1);
+            return x;
+        },
+        [&calls](int a, int b) {
+            calls.fetch_add(1);
+            return a + b;
+        },
+        2
+    );
+
+    REQUIRE(calls.load() == 0);
+    REQUIRE(expr.frontend.hash != 0);
 }
 
 TEST_CASE("lazy_parallel_reduce construction metadata", "[pravaha][reduce][lazy]") {
