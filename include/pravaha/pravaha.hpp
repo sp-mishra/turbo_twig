@@ -862,6 +862,18 @@ struct RuntimeState {
         return false;
     }
 
+    [[nodiscard]] bool is_in_any_success_group(std::size_t idx) const {
+        if (!join_groups) return false;
+        TaskId tid{idx};
+        for (const auto& jg : *join_groups) {
+            if (jg.policy.kind != JoinPolicyKind::AnySuccess) continue;
+            for (const auto& m : jg.members) {
+                if (m == tid) return true;
+            }
+        }
+        return false;
+    }
+
     static bool is_terminal_state(TaskState state) {
         return state == TaskState::Succeeded
             || state == TaskState::Failed
@@ -987,11 +999,22 @@ struct RuntimeState {
         decrement_downstream(idx);
     }
 
+    void mark_failed_any_success(std::size_t idx, PravahaError err) {
+        if (idx >= node_states.size()) return;
+        if (is_terminal_state(node_states[idx])) return;
+        node_states[idx] = TaskState::Failed;
+        record_join_terminal_for_node(idx, TaskState::Failed);
+        errors.push_back(std::move(err));
+        decrement_downstream(idx);
+    }
+
     void mark_failed(std::size_t idx, PravahaError err) {
         if (idx >= node_states.size()) return;
         if (is_terminal_state(node_states[idx])) return;
         if (is_in_collect_all_group(idx)) {
             mark_failed_collect_all(idx, std::move(err));
+        } else if (is_in_any_success_group(idx)) {
+            mark_failed_any_success(idx, std::move(err));
         } else {
             node_states[idx] = TaskState::Failed;
             record_join_terminal_for_node(idx, TaskState::Failed);
@@ -1037,7 +1060,9 @@ struct RuntimeState {
         for (auto group_id : node_join_groups[pred_idx]) {
             if (group_id >= joins.size()) continue;
             const auto kind = joins[group_id].policy.kind;
-            if (kind == JoinPolicyKind::AllOrNothing || kind == JoinPolicyKind::CollectAll) {
+            if (kind == JoinPolicyKind::AllOrNothing
+                || kind == JoinPolicyKind::CollectAll
+                || kind == JoinPolicyKind::AnySuccess) {
                 return true;
             }
         }
@@ -1052,11 +1077,24 @@ struct RuntimeState {
                 if (group_id >= joins.size()) continue;
                 const auto& join = joins[group_id];
                 if (join.policy.kind != JoinPolicyKind::AllOrNothing
-                    && join.policy.kind != JoinPolicyKind::CollectAll) continue;
+                    && join.policy.kind != JoinPolicyKind::CollectAll
+                    && join.policy.kind != JoinPolicyKind::AnySuccess) continue;
                 if (!join.resolved || !join.success) return false;
             }
         }
         return true;
+    }
+
+    [[nodiscard]] bool failed_node_tolerated_by_successful_any_success(std::size_t idx) const {
+        if (idx >= node_join_groups.size()) return false;
+        for (auto group_id : node_join_groups[idx]) {
+            if (group_id >= joins.size()) continue;
+            const auto& join = joins[group_id];
+            if (join.policy.kind == JoinPolicyKind::AnySuccess && join.resolved && join.success) {
+                return true;
+            }
+        }
+        return false;
     }
 
     void skip_downstream(std::size_t idx) {
@@ -1086,8 +1124,14 @@ struct RuntimeState {
         result.node_states = node_states;
         result.errors = errors;
         result.final_state = TaskState::Succeeded;
-        for (auto s : node_states) {
-            if (s == TaskState::Failed) { result.final_state = TaskState::Failed; break; }
+        for (std::size_t i = 0; i < node_states.size(); ++i) {
+            const auto s = node_states[i];
+            if (s == TaskState::Failed) {
+                if (!failed_node_tolerated_by_successful_any_success(i)) {
+                    result.final_state = TaskState::Failed;
+                    break;
+                }
+            }
             if (s == TaskState::Canceled) { result.final_state = TaskState::Canceled; break; }
         }
         return result;

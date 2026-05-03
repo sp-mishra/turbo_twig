@@ -1151,6 +1151,48 @@ TEST_CASE("Runner AllOrNothing - failed branch blocks downstream continuation", 
     REQUIRE(result->node_states[2] == pravaha::TaskState::Skipped);
 }
 
+TEST_CASE("Runner AnySuccess - success then fail allows downstream continuation", "[pravaha][runner][parallel][anysuccess]") {
+    int downstream_runs = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() {});
+    auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
+    auto c = pravaha::task("C", [&downstream_runs]() { ++downstream_runs; });
+    auto expr = pravaha::any_success(std::move(a) & std::move(b)) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(downstream_runs == 1);
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(result->node_states[2] == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner AnySuccess - fail then success allows downstream continuation", "[pravaha][runner][parallel][anysuccess]") {
+    int downstream_runs = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() { throw std::runtime_error("A failed"); });
+    auto b = pravaha::task("B", []() {});
+    auto c = pravaha::task("C", [&downstream_runs]() { ++downstream_runs; });
+    auto expr = pravaha::any_success(std::move(a) & std::move(b)) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(downstream_runs == 1);
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(result->node_states[2] == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner AnySuccess - fail and fail blocks downstream continuation", "[pravaha][runner][parallel][anysuccess]") {
+    int downstream_runs = 0;
+    pravaha::Runner<> runner;
+    auto a = pravaha::task("A", []() { throw std::runtime_error("A failed"); });
+    auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
+    auto c = pravaha::task("C", [&downstream_runs]() { ++downstream_runs; });
+    auto expr = pravaha::any_success(std::move(a) & std::move(b)) | std::move(c);
+    auto result = runner.submit(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(downstream_runs == 0);
+    REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    REQUIRE(result->node_states[2] == pravaha::TaskState::Skipped);
+}
+
 TEST_CASE("Runner parallel - if A fails in (A & B) | C, C is skipped", "[pravaha][runner][parallel]") {
     int b_ran = 0, c_ran = 0;
     pravaha::Runner<> runner;
