@@ -1371,6 +1371,62 @@ TEST_CASE("Runner Quorum - quorum<1> fail and fail blocks downstream continuatio
     REQUIRE(result->node_states[2] == pravaha::TaskState::Skipped);
 }
 
+TEST_CASE("Runner join policy final_state semantics", "[pravaha][runner][parallel][policy]") {
+    SECTION("any_success(success & fail) is Succeeded") {
+        pravaha::Runner<> runner;
+        auto a = pravaha::task("A", []() {});
+        auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
+        auto result = runner.submit(pravaha::any_success(std::move(a) & std::move(b)));
+        REQUIRE(result.has_value());
+        REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    }
+
+    SECTION("quorum<1>(success & fail) is Succeeded") {
+        pravaha::Runner<> runner;
+        auto a = pravaha::task("A", []() {});
+        auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
+        auto result = runner.submit(pravaha::quorum<1>(std::move(a) & std::move(b)));
+        REQUIRE(result.has_value());
+        REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    }
+
+    SECTION("collect_all(success & fail) is Failed") {
+        pravaha::Runner<> runner;
+        auto a = pravaha::task("A", []() {});
+        auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
+        auto result = runner.submit(pravaha::collect_all(std::move(a) & std::move(b)));
+        REQUIRE(result.has_value());
+        REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    }
+
+    SECTION("all_or_nothing(success & fail) is Failed") {
+        pravaha::Runner<> runner;
+        auto a = pravaha::task("A", []() {});
+        auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
+        auto result = runner.submit(std::move(a) & std::move(b));
+        REQUIRE(result.has_value());
+        REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    }
+
+    SECTION("any_success(fail & fail) is Failed") {
+        pravaha::Runner<> runner;
+        auto a = pravaha::task("A", []() { throw std::runtime_error("A failed"); });
+        auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
+        auto result = runner.submit(pravaha::any_success(std::move(a) & std::move(b)));
+        REQUIRE(result.has_value());
+        REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    }
+
+    SECTION("quorum<2>(success & fail) is Failed") {
+        pravaha::Runner<> runner;
+        auto a = pravaha::task("A", []() {});
+        auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
+        auto result = runner.submit(pravaha::quorum<2>(std::move(a) & std::move(b)));
+        REQUIRE(result.has_value());
+        REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    }
+}
+
 TEST_CASE("Runner parallel - if A fails in (A & B) | C, C is skipped", "[pravaha][runner][parallel]") {
     int b_ran = 0, c_ran = 0;
     pravaha::Runner<> runner;

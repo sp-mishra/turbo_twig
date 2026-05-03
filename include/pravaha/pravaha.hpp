@@ -1580,7 +1580,7 @@ struct RuntimeState {
         return true;
     }
 
-    [[nodiscard]] bool failed_node_tolerated_by_successful_any_success(std::size_t idx) const {
+    [[nodiscard]] bool failed_node_tolerated_by_successful_join(std::size_t idx) const {
         if (idx >= node_join_groups.size()) return false;
         for (auto group_id : node_join_groups[idx]) {
             if (group_id >= joins.size()) continue;
@@ -1624,7 +1624,7 @@ struct RuntimeState {
         for (std::size_t i = 0; i < node_states.size(); ++i) {
             const auto s = node_states[i];
             if (s == TaskState::Failed) {
-                if (!failed_node_tolerated_by_successful_any_success(i)) {
+                if (!failed_node_tolerated_by_successful_join(i)) {
                     result.final_state = TaskState::Failed;
                     break;
                 }
