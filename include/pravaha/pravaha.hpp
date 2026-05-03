@@ -1867,11 +1867,21 @@ inline bool is_collect_all_keyword(std::string_view token) {
     return keyword_matches(token, "collect_all");
 }
 
+inline bool is_any_success_keyword(std::string_view token) {
+    return keyword_matches(token, "any_success");
+}
+
+inline bool is_quorum_keyword(std::string_view token) {
+    return keyword_matches(token, "quorum");
+}
+
 inline bool is_reserved_keyword(std::string_view token) {
     return is_pipeline_keyword(token)
         || is_then_keyword(token)
         || is_parallel_keyword(token)
-        || is_collect_all_keyword(token);
+        || is_collect_all_keyword(token)
+        || is_any_success_keyword(token)
+        || is_quorum_keyword(token);
 }
 
 inline bool identifier_matches(std::string_view token) {
@@ -2116,6 +2126,7 @@ struct SymbolicSequenceExpr {
 };
 struct SymbolicParallelExpr {
     std::vector<SymbolicExpr> branches;
+    JoinPolicy policy{};
     LitheFrontendMeta frontend;
 };
 
@@ -2180,6 +2191,16 @@ inline LitheFrontendMeta make_frontend_meta_for_symbolic_expr(const SymbolicExpr
                 lithe::as_expr(next_meta.hash)
             );
             acc_meta = lithe_frontend::make_meta(par_expr);
+        }
+
+        if (par.policy.kind == JoinPolicyKind::CollectAll) {
+            return lithe_frontend::make_collect_all_meta(acc_meta.hash);
+        }
+        if (par.policy.kind == JoinPolicyKind::AnySuccess) {
+            return lithe_frontend::make_any_success_meta(acc_meta.hash);
+        }
+        if (par.policy.kind == JoinPolicyKind::Quorum) {
+            return lithe_frontend::make_quorum_meta(acc_meta.hash, par.policy.quorum_required);
         }
 
         return acc_meta;
@@ -2249,7 +2270,7 @@ struct Parser {
         return tok == expected;
     }
 
-    Outcome<SymbolicExpr> parse_parallel() {
+    Outcome<SymbolicExpr> parse_parallel(JoinPolicy policy = JoinPolicy{}) {
         std::vector<SymbolicExpr> branches;
         while (true) {
             skip_ws();
@@ -2287,11 +2308,39 @@ struct Parser {
             par_meta = lithe_frontend::make_meta(par_expr);
         }
 
+        if (policy.kind == JoinPolicyKind::CollectAll) {
+            par_meta = lithe_frontend::make_collect_all_meta(par_meta.hash);
+        } else if (policy.kind == JoinPolicyKind::AnySuccess) {
+            par_meta = lithe_frontend::make_any_success_meta(par_meta.hash);
+        } else if (policy.kind == JoinPolicyKind::Quorum) {
+            par_meta = lithe_frontend::make_quorum_meta(par_meta.hash, policy.quorum_required);
+        }
+
         auto par = std::make_unique<SymbolicParallelExpr>();
         par->branches = std::move(branches);
+        par->policy = policy;
         par->frontend = std::move(par_meta);
         SymbolicExpr result{std::move(par)};
         return result;
+    }
+
+    Outcome<std::size_t> parse_quorum_required(std::string_view token) {
+        if (token.empty()) {
+            return std::unexpected(PravahaError{ErrorKind::ParseError, "expected quorum value"});
+        }
+        if (!std::all_of(token.begin(), token.end(), [](unsigned char c) { return std::isdigit(c); })) {
+            return std::unexpected(PravahaError{ErrorKind::ParseError, "expected quorum value"});
+        }
+        std::size_t required = 0;
+        try {
+            required = static_cast<std::size_t>(std::stoull(std::string(token)));
+        } catch (...) {
+            return std::unexpected(PravahaError{ErrorKind::ParseError, "expected quorum value"});
+        }
+        if (required == 0) {
+            return std::unexpected(PravahaError{ErrorKind::ParseError, "quorum requires value > 0"});
+        }
+        return required;
     }
 
     Outcome<SymbolicExpr> parse_step() {
@@ -2306,7 +2355,55 @@ struct Parser {
                 });
             }
             pos = intro->body_start_offset;
-            return parse_parallel();
+            return parse_parallel(JoinPolicy{JoinPolicyKind::AllOrNothing, 0});
+        }
+
+        if (lithe_frontend::is_collect_all_keyword(tok)) {
+            auto kw = lithe_frontend::capture_keyword(src, pos, "collect_all", "collect_all_keyword");
+            if (!kw.has_value()) {
+                return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'collect_all'"});
+            }
+            pos = kw->capture.end;
+            skip_ws();
+            if (pos >= src.size() || src[pos] != '{') {
+                return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after collect_all"});
+            }
+            ++pos;
+            return parse_parallel(JoinPolicy{JoinPolicyKind::CollectAll, 0});
+        }
+
+        if (lithe_frontend::is_any_success_keyword(tok)) {
+            auto kw = lithe_frontend::capture_keyword(src, pos, "any_success", "any_success_keyword");
+            if (!kw.has_value()) {
+                return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'any_success'"});
+            }
+            pos = kw->capture.end;
+            skip_ws();
+            if (pos >= src.size() || src[pos] != '{') {
+                return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after any_success"});
+            }
+            ++pos;
+            return parse_parallel(JoinPolicy{JoinPolicyKind::AnySuccess, 0});
+        }
+
+        if (lithe_frontend::is_quorum_keyword(tok)) {
+            auto kw = lithe_frontend::capture_keyword(src, pos, "quorum", "quorum_keyword");
+            if (!kw.has_value()) {
+                return std::unexpected(PravahaError{ErrorKind::ParseError, "expected keyword 'quorum'"});
+            }
+            pos = kw->capture.end;
+            skip_ws();
+            auto required_tok = consume_token();
+            auto required = parse_quorum_required(required_tok);
+            if (!required.has_value()) {
+                return std::unexpected(required.error());
+            }
+            skip_ws();
+            if (pos >= src.size() || src[pos] != '{') {
+                return std::unexpected(PravahaError{ErrorKind::ParseError, "expected '{' after quorum value"});
+            }
+            ++pos;
+            return parse_parallel(JoinPolicy{JoinPolicyKind::Quorum, required.value()});
         }
 
         // If a token looks like a misspelled parallel block intro and is
@@ -2471,6 +2568,21 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
             for (auto s : bs) starts.push_back(s);
             for (auto t : bt) terminals.push_back(t);
         }
+        if (par.policy.kind == JoinPolicyKind::Quorum) {
+            if (par.policy.quorum_required == 0) {
+                return std::unexpected(PravahaError{
+                    ErrorKind::ValidationError,
+                    "Quorum policy requires quorum_required > 0"
+                });
+            }
+            if (par.policy.quorum_required > terminals.size()) {
+                return std::unexpected(PravahaError{
+                    ErrorKind::ValidationError,
+                    "Quorum policy requires quorum_required <= branch_count"
+                });
+            }
+        }
+        ir.add_join_group(terminals, par.policy, par.frontend.hash, par.frontend.dump);
         return Unit{};
     }
 

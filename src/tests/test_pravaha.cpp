@@ -1818,9 +1818,11 @@ TEST_CASE("pravaha lithe frontend canonical symbolic builders", "[pravaha][parse
 
 TEST_CASE("pravaha lithe frontend keyword matching", "[pravaha][parse][lithe]") {
     using pravaha::symbolic::lithe_frontend::keyword_matches;
+    using pravaha::symbolic::lithe_frontend::is_any_success_keyword;
     using pravaha::symbolic::lithe_frontend::is_collect_all_keyword;
     using pravaha::symbolic::lithe_frontend::is_parallel_keyword;
     using pravaha::symbolic::lithe_frontend::is_pipeline_keyword;
+    using pravaha::symbolic::lithe_frontend::is_quorum_keyword;
     using pravaha::symbolic::lithe_frontend::is_reserved_keyword;
     using pravaha::symbolic::lithe_frontend::is_then_keyword;
 
@@ -1834,6 +1836,8 @@ TEST_CASE("pravaha lithe frontend keyword matching", "[pravaha][parse][lithe]") 
     REQUIRE(is_then_keyword("then"));
     REQUIRE(is_parallel_keyword("parallel"));
     REQUIRE(is_collect_all_keyword("collect_all"));
+    REQUIRE(is_any_success_keyword("any_success"));
+    REQUIRE(is_quorum_keyword("quorum"));
 
     REQUIRE(is_reserved_keyword("then"));
     REQUIRE(!is_reserved_keyword("normal_task"));
@@ -1856,6 +1860,8 @@ TEST_CASE("pravaha lithe frontend identifier validation", "[pravaha][parse][lith
     REQUIRE(!identifier_matches("then"));
     REQUIRE(!identifier_matches("parallel"));
     REQUIRE(!identifier_matches("collect_all"));
+    REQUIRE(!identifier_matches("any_success"));
+    REQUIRE(!identifier_matches("quorum"));
 }
 
 TEST_CASE("pravaha lithe frontend captures tokens", "[pravaha][parse][lithe]") {
@@ -2095,7 +2101,19 @@ TEST_CASE("parse_pipeline validates task identifiers via lithe frontend", "[prav
         auto result = pravaha::parse_pipeline("pipeline p { collect_all }");
         REQUIRE(!result.has_value());
         REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
-        REQUIRE(result.error().message.find("reserved") != std::string::npos);
+        const bool ok = result.error().message.find("reserved") != std::string::npos
+            || result.error().message.find("{") != std::string::npos;
+        REQUIRE(ok);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { any_success }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { quorum }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
     }
 }
 
@@ -2124,6 +2142,27 @@ TEST_CASE("parse_pipeline uses lithe frontend parallel intro", "[pravaha][parse]
 
     {
         auto result = pravaha::parse_pipeline("pipeline p { parallel a, b }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { collect_all { a, b } }");
+        REQUIRE(result.has_value());
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { any_success { a, b } }");
+        REQUIRE(result.has_value());
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { quorum 2 { a, b, c } }");
+        REQUIRE(result.has_value());
+    }
+
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { quorum 0 { a, b } }");
         REQUIRE(!result.has_value());
         REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
     }
@@ -2176,8 +2215,19 @@ TEST_CASE("reserved textual keywords are rejected as task identifiers", "[pravah
         REQUIRE(!result.has_value());
         REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
         const bool ok = result.error().message.find("reserved") != std::string::npos
-            || result.error().message.find("identifier") != std::string::npos;
+            || result.error().message.find("identifier") != std::string::npos
+            || result.error().message.find("{") != std::string::npos;
         REQUIRE(ok);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { any_success }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
+    }
+    {
+        auto result = pravaha::parse_pipeline("pipeline p { quorum }");
+        REQUIRE(!result.has_value());
+        REQUIRE(result.error().kind == pravaha::ErrorKind::ParseError);
     }
 }
 
@@ -2344,6 +2394,63 @@ TEST_CASE("lower_symbolic_pipeline - textual symbolic tasks propagate frontend d
         REQUIRE(n.frontend_hash != 0);
         REQUIRE_FALSE(n.frontend_dump.empty());
     }
+}
+
+TEST_CASE("lower_symbolic_pipeline - collect_all textual lowering has CollectAll policy", "[pravaha][parse][policy]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { collect_all { a, b } }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_command("a", pravaha::TaskCommand::make([](){}));
+    reg.register_command("b", pravaha::TaskCommand::make([](){}));
+
+    auto ir_result = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir_result.has_value());
+    REQUIRE(ir_result->join_groups.size() == 1);
+    REQUIRE(ir_result->join_groups[0].policy.kind == pravaha::JoinPolicyKind::CollectAll);
+}
+
+TEST_CASE("lower_symbolic_pipeline - any_success textual lowering has AnySuccess policy", "[pravaha][parse][policy]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { any_success { a, b } }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_command("a", pravaha::TaskCommand::make([](){}));
+    reg.register_command("b", pravaha::TaskCommand::make([](){}));
+
+    auto ir_result = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir_result.has_value());
+    REQUIRE(ir_result->join_groups.size() == 1);
+    REQUIRE(ir_result->join_groups[0].policy.kind == pravaha::JoinPolicyKind::AnySuccess);
+}
+
+TEST_CASE("lower_symbolic_pipeline - quorum textual lowering has Quorum policy", "[pravaha][parse][policy]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { quorum 2 { a, b, c } }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_command("a", pravaha::TaskCommand::make([](){}));
+    reg.register_command("b", pravaha::TaskCommand::make([](){}));
+    reg.register_command("c", pravaha::TaskCommand::make([](){}));
+
+    auto ir_result = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir_result.has_value());
+    REQUIRE(ir_result->join_groups.size() == 1);
+    REQUIRE(ir_result->join_groups[0].policy.kind == pravaha::JoinPolicyKind::Quorum);
+    REQUIRE(ir_result->join_groups[0].policy.quorum_required == 2);
+}
+
+TEST_CASE("lower_symbolic_pipeline - quorum over branch count fails validation", "[pravaha][parse][policy]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { quorum 3 { a, b } }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_command("a", pravaha::TaskCommand::make([](){}));
+    reg.register_command("b", pravaha::TaskCommand::make([](){}));
+
+    auto ir_result = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(!ir_result.has_value());
+    REQUIRE(ir_result.error().kind == pravaha::ErrorKind::ValidationError);
 }
 
 TEST_CASE("parse_pipeline - invalid syntax returns ParseError", "[pravaha][parse]") {
