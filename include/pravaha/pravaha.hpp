@@ -1340,6 +1340,72 @@ struct RuntimeState {
         return msg;
     }
 
+    [[nodiscard]] bool join_group_controls_successor(std::size_t group_id, std::size_t succ_idx) const {
+        if (!join_groups || group_id >= join_groups->size()) return false;
+        const auto& members = (*join_groups)[group_id].members;
+        for (auto member : members) {
+            if (member.value >= successors.size()) continue;
+            const auto& succs = successors[member.value];
+            if (std::find(succs.begin(), succs.end(), succ_idx) != succs.end()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool predecessor_satisfied_for_successor(std::size_t pred_idx, std::size_t succ_idx) const {
+        if (pred_idx >= node_states.size() || succ_idx >= node_states.size()) return false;
+
+        if (node_states[pred_idx] == TaskState::Succeeded) return true;
+
+        if (pred_idx < node_join_groups.size()) {
+            for (auto group_id : node_join_groups[pred_idx]) {
+                if (group_id >= joins.size()) continue;
+                if (!join_group_controls_successor(group_id, succ_idx)) continue;
+                const auto& join = joins[group_id];
+                const bool releasable_kind =
+                    join.policy.kind == JoinPolicyKind::AnySuccess
+                    || join.policy.kind == JoinPolicyKind::Quorum;
+                if (releasable_kind && join.resolved && join.success) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    [[nodiscard]] bool successor_ready_by_semantics(std::size_t succ_idx) const {
+        if (succ_idx >= node_states.size()) return false;
+        if (node_states[succ_idx] != TaskState::Created) return false;
+
+        for (auto pred_idx : predecessors[succ_idx]) {
+            if (!predecessor_satisfied_for_successor(pred_idx, succ_idx)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void release_successful_join_successors(std::size_t group_id) {
+        if (!join_groups || group_id >= joins.size() || group_id >= join_groups->size()) return;
+
+        const auto& join = joins[group_id];
+        if (!join.resolved || !join.success) return;
+        if (join.policy.kind != JoinPolicyKind::AnySuccess
+            && join.policy.kind != JoinPolicyKind::Quorum) return;
+
+        const auto& members = (*join_groups)[group_id].members;
+        for (auto member : members) {
+            if (member.value >= successors.size()) continue;
+            for (auto succ : successors[member.value]) {
+                if (successor_ready_by_semantics(succ)) {
+                    node_states[succ] = TaskState::Ready;
+                }
+            }
+        }
+    }
+
     void record_join_terminal(std::size_t group_id, TaskState terminal_state) {
         if (group_id >= joins.size()) return;
         if (!is_terminal_state(terminal_state)) return;
@@ -1368,6 +1434,9 @@ struct RuntimeState {
         }
 
         resolve_join(join);
+        if (!was_resolved && join.resolved && join.success) {
+            release_successful_join_successors(group_id);
+        }
         if (!was_resolved && join.resolved && !join.success
             && group_id < join_failure_reported.size() && !join_failure_reported[group_id]) {
             join_failure_reported[group_id] = true;
@@ -1847,14 +1916,10 @@ struct DefaultReadyPolicy {
     static bool is_ready(const RuntimeStateLike& state, std::size_t index) {
         if (state.canceled) return false;
         if (index >= state.node_states.size() || index >= state.remaining_deps.size()) return false;
-        if (state.remaining_deps[index] != 0) return false;
-
-        // Accept either state model: precomputed Ready nodes or Created+deps==0 nodes.
         const auto node_state = state.node_states[index];
-        const bool schedulable_state =
-            node_state == TaskState::Ready || node_state == TaskState::Created;
-
-        return schedulable_state;
+        if (node_state == TaskState::Ready) return true;
+        if (node_state != TaskState::Created) return false;
+        return state.remaining_deps[index] == 0;
     }
 };
 

@@ -881,6 +881,83 @@ TEST_CASE("join runtime state - member accounting prevents double count", "[prav
     REQUIRE(state.joins[0].succeeded == 1);
 }
 
+TEST_CASE("join runtime state - AnySuccess releases downstream on first success", "[pravaha][runtime][join][early-release]") {
+    pravaha::TaskIr ir;
+    ir.add_node("fast_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("long_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("downstream", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_edge(pravaha::TaskId{0}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_edge(pravaha::TaskId{1}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_join_group({pravaha::TaskId{0}, pravaha::TaskId{1}}, pravaha::JoinPolicy{pravaha::JoinPolicyKind::AnySuccess, 0});
+
+    auto state = pravaha::RuntimeState::build(ir);
+    state.mark_succeeded(0);
+
+    REQUIRE(state.node_states[2] == pravaha::TaskState::Ready);
+}
+
+TEST_CASE("join runtime state - Quorum<1> releases downstream on first success", "[pravaha][runtime][join][early-release]") {
+    pravaha::TaskIr ir;
+    ir.add_node("fast_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("long_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("downstream", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_edge(pravaha::TaskId{0}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_edge(pravaha::TaskId{1}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_join_group({pravaha::TaskId{0}, pravaha::TaskId{1}}, pravaha::JoinPolicy{pravaha::JoinPolicyKind::Quorum, 1});
+
+    auto state = pravaha::RuntimeState::build(ir);
+    state.mark_succeeded(0);
+
+    REQUIRE(state.node_states[2] == pravaha::TaskState::Ready);
+}
+
+TEST_CASE("join runtime state - Quorum<2> waits for both successes", "[pravaha][runtime][join][early-release]") {
+    pravaha::TaskIr ir;
+    ir.add_node("first_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("second_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("downstream", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_edge(pravaha::TaskId{0}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_edge(pravaha::TaskId{1}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_join_group({pravaha::TaskId{0}, pravaha::TaskId{1}}, pravaha::JoinPolicy{pravaha::JoinPolicyKind::Quorum, 2});
+
+    auto state = pravaha::RuntimeState::build(ir);
+    state.mark_succeeded(0);
+    REQUIRE(state.node_states[2] == pravaha::TaskState::Created);
+
+    state.mark_succeeded(1);
+    REQUIRE(state.node_states[2] == pravaha::TaskState::Ready);
+}
+
+TEST_CASE("join runtime state - CollectAll waits for both successes", "[pravaha][runtime][join][early-release]") {
+    pravaha::TaskIr ir;
+    ir.add_node("first_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("second_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("downstream", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_edge(pravaha::TaskId{0}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_edge(pravaha::TaskId{1}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_join_group({pravaha::TaskId{0}, pravaha::TaskId{1}}, pravaha::JoinPolicy{pravaha::JoinPolicyKind::CollectAll, 0});
+
+    auto state = pravaha::RuntimeState::build(ir);
+    state.mark_succeeded(0);
+
+    REQUIRE(state.node_states[2] == pravaha::TaskState::Created);
+}
+
+TEST_CASE("join runtime state - AllOrNothing waits for both successes", "[pravaha][runtime][join][early-release]") {
+    pravaha::TaskIr ir;
+    ir.add_node("first_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("second_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("downstream", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_edge(pravaha::TaskId{0}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_edge(pravaha::TaskId{1}, pravaha::TaskId{2}, pravaha::EdgeKind::Sequence);
+    ir.add_join_group({pravaha::TaskId{0}, pravaha::TaskId{1}}, pravaha::JoinPolicy{pravaha::JoinPolicyKind::AllOrNothing, 0});
+
+    auto state = pravaha::RuntimeState::build(ir);
+    state.mark_succeeded(0);
+
+    REQUIRE(state.node_states[2] == pravaha::TaskState::Created);
+}
+
 // ============================================================================
 // SECTION 15: LiteGraph Validation Layer
 // ============================================================================
