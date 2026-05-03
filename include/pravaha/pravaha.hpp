@@ -1005,7 +1005,7 @@ struct RuntimeState {
             if (remaining_deps[succ] > 0) {
                 remaining_deps[succ]--;
                 if (remaining_deps[succ] == 0 && node_states[succ] == TaskState::Created) {
-                    if (has_failed_predecessor(succ) || !all_or_nothing_join_success_for_successor(succ)) {
+                    if (has_failed_predecessor(succ) || !blocking_join_success_for_successor(succ)) {
                         node_states[succ] = TaskState::Skipped;
                         record_join_terminal_for_node(succ, TaskState::Skipped);
                         skip_downstream(succ);
@@ -1022,6 +1022,9 @@ struct RuntimeState {
         for (std::size_t i = 0; i < successors.size(); ++i) {
             for (auto s : successors[i]) {
                 if (s == succ_idx && node_states[i] == TaskState::Failed) {
+                    if (predecessor_controlled_by_blocking_join(i)) {
+                        continue;
+                    }
                     return true;
                 }
             }
@@ -1029,14 +1032,27 @@ struct RuntimeState {
         return false;
     }
 
-    [[nodiscard]] bool all_or_nothing_join_success_for_successor(std::size_t succ_idx) const {
+    [[nodiscard]] bool predecessor_controlled_by_blocking_join(std::size_t pred_idx) const {
+        if (pred_idx >= node_join_groups.size()) return false;
+        for (auto group_id : node_join_groups[pred_idx]) {
+            if (group_id >= joins.size()) continue;
+            const auto kind = joins[group_id].policy.kind;
+            if (kind == JoinPolicyKind::AllOrNothing || kind == JoinPolicyKind::CollectAll) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool blocking_join_success_for_successor(std::size_t succ_idx) const {
         if (succ_idx >= predecessors.size()) return true;
         for (auto pred_idx : predecessors[succ_idx]) {
             if (pred_idx >= node_join_groups.size()) continue;
             for (auto group_id : node_join_groups[pred_idx]) {
                 if (group_id >= joins.size()) continue;
                 const auto& join = joins[group_id];
-                if (join.policy.kind != JoinPolicyKind::AllOrNothing) continue;
+                if (join.policy.kind != JoinPolicyKind::AllOrNothing
+                    && join.policy.kind != JoinPolicyKind::CollectAll) continue;
                 if (!join.resolved || !join.success) return false;
             }
         }
