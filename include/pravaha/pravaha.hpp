@@ -587,15 +587,26 @@ Outcome<TaskIr> lower_to_ir(Expr&& expr) {
             continue;
         }
         if (group.policy.quorum_required == 0) {
+            std::string msg = "quorum validation failed: policy=Quorum quorum_required=0 branch_count="
+                + std::to_string(group.members.size());
+            if (group.frontend_hash != 0) {
+                msg += " frontend_hash=" + std::to_string(group.frontend_hash);
+            }
             return std::unexpected(PravahaError{
                 ErrorKind::ValidationError,
-                "Quorum policy requires quorum_required > 0"
+                std::move(msg)
             });
         }
         if (group.policy.quorum_required > group.members.size()) {
+            std::string msg = "quorum validation failed: policy=Quorum quorum_required="
+                + std::to_string(group.policy.quorum_required)
+                + " branch_count=" + std::to_string(group.members.size());
+            if (group.frontend_hash != 0) {
+                msg += " frontend_hash=" + std::to_string(group.frontend_hash);
+            }
             return std::unexpected(PravahaError{
                 ErrorKind::ValidationError,
-                "Quorum policy requires quorum_required <= branch_count"
+                std::move(msg)
             });
         }
     }
@@ -797,6 +808,7 @@ struct RuntimeState {
     std::vector<std::vector<std::size_t>> predecessors;
     std::vector<JoinRuntimeState> joins;
     std::vector<std::vector<bool>> join_member_recorded;
+    std::vector<bool> join_failure_reported;
     std::vector<std::vector<std::size_t>> node_join_groups;
     std::vector<PravahaError> errors;
     std::vector<IrJoinGroup> const* join_groups{nullptr};
@@ -814,6 +826,7 @@ struct RuntimeState {
 
         rs.joins.reserve(ir.join_groups.size());
         rs.join_member_recorded.resize(ir.join_groups.size());
+        rs.join_failure_reported.assign(ir.join_groups.size(), false);
         for (std::size_t gid = 0; gid < ir.join_groups.size(); ++gid) {
             const auto& group = ir.join_groups[gid];
             JoinRuntimeState join;
@@ -945,11 +958,58 @@ struct RuntimeState {
         }
     }
 
+    [[nodiscard]] std::string join_failure_message(std::size_t group_id) const {
+        if (group_id >= joins.size()) {
+            return "join failed";
+        }
+        const auto& join = joins[group_id];
+        std::string msg;
+        switch (join.policy.kind) {
+        case JoinPolicyKind::AllOrNothing:
+            msg = "AllOrNothing failed because at least one branch failed";
+            break;
+        case JoinPolicyKind::CollectAll:
+            msg = "CollectAll completed with one or more failures";
+            break;
+        case JoinPolicyKind::AnySuccess:
+            msg = "AnySuccess failed because no branch succeeded";
+            break;
+        case JoinPolicyKind::Quorum:
+            msg = "Quorum failed because quorum became impossible";
+            break;
+        }
+        msg += " policy=";
+        switch (join.policy.kind) {
+        case JoinPolicyKind::AllOrNothing:
+            msg += "AllOrNothing";
+            break;
+        case JoinPolicyKind::CollectAll:
+            msg += "CollectAll";
+            break;
+        case JoinPolicyKind::AnySuccess:
+            msg += "AnySuccess";
+            break;
+        case JoinPolicyKind::Quorum:
+            msg += "Quorum";
+            break;
+        }
+        msg += " quorum_required=" + std::to_string(join.policy.quorum_required)
+            + " succeeded=" + std::to_string(join.succeeded)
+            + " failed=" + std::to_string(join.failed)
+            + " canceled=" + std::to_string(join.canceled)
+            + " skipped=" + std::to_string(join.skipped);
+        if (join_groups && group_id < join_groups->size() && (*join_groups)[group_id].frontend_hash != 0) {
+            msg += " frontend_hash=" + std::to_string((*join_groups)[group_id].frontend_hash);
+        }
+        return msg;
+    }
+
     void record_join_terminal(std::size_t group_id, TaskState terminal_state) {
         if (group_id >= joins.size()) return;
         if (!is_terminal_state(terminal_state)) return;
 
         auto& join = joins[group_id];
+        const bool was_resolved = join.resolved;
         if (join.resolved && join.success && join.policy.kind == JoinPolicyKind::AnySuccess) {
             return;
         }
@@ -972,6 +1032,11 @@ struct RuntimeState {
         }
 
         resolve_join(join);
+        if (!was_resolved && join.resolved && !join.success
+            && group_id < join_failure_reported.size() && !join_failure_reported[group_id]) {
+            join_failure_reported[group_id] = true;
+            errors.push_back(PravahaError{ErrorKind::TaskFailed, join_failure_message(group_id)});
+        }
     }
 
     void record_join_terminal_for_member(std::size_t group_id, std::size_t node_index, TaskState terminal_state) {
@@ -2570,15 +2635,26 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
         }
         if (par.policy.kind == JoinPolicyKind::Quorum) {
             if (par.policy.quorum_required == 0) {
+                std::string msg = "quorum validation failed: policy=Quorum quorum_required=0 branch_count="
+                    + std::to_string(terminals.size());
+                if (par.frontend.hash != 0) {
+                    msg += " frontend_hash=" + std::to_string(par.frontend.hash);
+                }
                 return std::unexpected(PravahaError{
                     ErrorKind::ValidationError,
-                    "Quorum policy requires quorum_required > 0"
+                    std::move(msg)
                 });
             }
             if (par.policy.quorum_required > terminals.size()) {
+                std::string msg = "quorum validation failed: policy=Quorum quorum_required="
+                    + std::to_string(par.policy.quorum_required)
+                    + " branch_count=" + std::to_string(terminals.size());
+                if (par.frontend.hash != 0) {
+                    msg += " frontend_hash=" + std::to_string(par.frontend.hash);
+                }
                 return std::unexpected(PravahaError{
                     ErrorKind::ValidationError,
-                    "Quorum policy requires quorum_required <= branch_count"
+                    std::move(msg)
                 });
             }
         }

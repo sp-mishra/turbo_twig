@@ -803,6 +803,7 @@ TEST_CASE("lower_to_ir - quorum larger than branch count fails validation", "[pr
     auto result = pravaha::lower_to_ir(std::move(expr));
     REQUIRE(!result.has_value());
     REQUIRE(result.error().kind == pravaha::ErrorKind::ValidationError);
+    REQUIRE(result.error().message.find("quorum") != std::string::npos);
 }
 
 TEST_CASE("join runtime state - AllOrNothing success and failure", "[pravaha][runtime][join]") {
@@ -1149,6 +1150,11 @@ TEST_CASE("Runner AllOrNothing - failed branch blocks downstream continuation", 
     REQUIRE(result->node_states.size() == 3);
     REQUIRE(result->node_states[0] == pravaha::TaskState::Failed);
     REQUIRE(result->node_states[2] == pravaha::TaskState::Skipped);
+    const bool has_all_or_nothing = std::any_of(result->errors.begin(), result->errors.end(), [](const auto& e) {
+        return e.message.find("AllOrNothing") != std::string::npos
+            || e.message.find("all_or_nothing") != std::string::npos;
+    });
+    REQUIRE(has_all_or_nothing);
 }
 
 TEST_CASE("Runner AnySuccess - success then fail allows downstream continuation", "[pravaha][runner][parallel][anysuccess]") {
@@ -1191,6 +1197,11 @@ TEST_CASE("Runner AnySuccess - fail and fail blocks downstream continuation", "[
     REQUIRE(downstream_runs == 0);
     REQUIRE(result->final_state == pravaha::TaskState::Failed);
     REQUIRE(result->node_states[2] == pravaha::TaskState::Skipped);
+    const bool has_any_success = std::any_of(result->errors.begin(), result->errors.end(), [](const auto& e) {
+        return e.message.find("AnySuccess") != std::string::npos
+            || e.message.find("any_success") != std::string::npos;
+    });
+    REQUIRE(has_any_success);
 }
 
 TEST_CASE("Runner Quorum - quorum<1> success and fail allows downstream continuation", "[pravaha][runner][parallel][quorum]") {
@@ -1361,7 +1372,12 @@ TEST_CASE("CollectAll - errors from failing branches are recorded", "[pravaha][r
     auto par = pravaha::collect_all(std::move(a) & std::move(b));
     auto result = runner.submit(std::move(par));
     REQUIRE(result.has_value());
-    REQUIRE(result.value().errors.size() == 2);
+    REQUIRE(result.value().errors.size() >= 2);
+    const bool has_collect_all = std::any_of(result->errors.begin(), result->errors.end(), [](const auto& e) {
+        return e.message.find("CollectAll") != std::string::npos
+            || e.message.find("collect_all") != std::string::npos;
+    });
+    REQUIRE(has_collect_all);
     REQUIRE(result.value().final_state == pravaha::TaskState::Failed);
 }
 
