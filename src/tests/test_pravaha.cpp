@@ -971,6 +971,40 @@ TEST_CASE("topological_order - (A & B) | C returns A/B before C", "[pravaha][lit
     REQUIRE(b_pos < c_pos);
 }
 
+TEST_CASE("topological_order - repeated calls are stable", "[pravaha][litegraph]") {
+    auto a = pravaha::task("A", []() {});
+    auto b = pravaha::task("B", []() {});
+    auto c = pravaha::task("C", []() {});
+    auto expr = std::move(a) | std::move(b) | std::move(c);
+    auto ir_result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(ir_result.has_value());
+
+    auto order1 = pravaha::topological_order(ir_result.value());
+    auto order2 = pravaha::topological_order(ir_result.value());
+    REQUIRE(order1.has_value());
+    REQUIRE(order2.has_value());
+    REQUIRE(order1.value() == order2.value());
+}
+
+TEST_CASE("validate_ir_with_litegraph - mutation invalidates cached dependency graph", "[pravaha][litegraph][regression]") {
+    pravaha::TaskIr ir;
+    ir.add_node("A", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("B", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_edge(pravaha::TaskId{0}, pravaha::TaskId{1}, pravaha::EdgeKind::Sequence);
+
+    auto first_validation = pravaha::validate_ir_with_litegraph(ir);
+    REQUIRE(first_validation.has_value());
+
+    ir.add_edge(pravaha::TaskId{1}, pravaha::TaskId{0}, pravaha::EdgeKind::Sequence);
+    auto second_validation = pravaha::validate_ir_with_litegraph(ir);
+    REQUIRE(!second_validation.has_value());
+    REQUIRE(second_validation.error().kind == pravaha::ErrorKind::CycleDetected);
+
+    auto topo_result = pravaha::topological_order(ir);
+    REQUIRE(!topo_result.has_value());
+    REQUIRE(topo_result.error().kind == pravaha::ErrorKind::CycleDetected);
+}
+
 TEST_CASE("to_litegraph - converts valid IR to ExecutionGraph", "[pravaha][litegraph]") {
     auto a = pravaha::task("A", []() {});
     auto b = pravaha::task("B", []() {});

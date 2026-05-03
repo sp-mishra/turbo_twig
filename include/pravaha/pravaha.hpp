@@ -513,6 +513,36 @@ inline constexpr TaskId invalid_task_id{};
 
 enum class EdgeKind { Sequence, Data, Cancellation, Join };
 
+struct GraphNodePayload {
+    TaskId task_id;
+    std::string name;
+    bool operator==(const GraphNodePayload& o) const noexcept { return task_id == o.task_id && name == o.name; }
+};
+
+struct GraphEdgePayload {
+    EdgeKind kind;
+    bool operator==(const GraphEdgePayload& o) const noexcept { return kind == o.kind; }
+};
+
+} // namespace pravaha
+
+namespace std {
+template<> struct hash<pravaha::GraphNodePayload> {
+    std::size_t operator()(const pravaha::GraphNodePayload& p) const noexcept {
+        return std::hash<std::size_t>{}(p.task_id.value) ^ (std::hash<std::string>{}(p.name) << 1);
+    }
+};
+template<> struct hash<pravaha::GraphEdgePayload> {
+    std::size_t operator()(const pravaha::GraphEdgePayload& p) const noexcept {
+        return std::hash<int>{}(static_cast<int>(p.kind));
+    }
+};
+} // namespace std
+
+namespace pravaha {
+
+using ExecutionGraph = litegraph::Graph<GraphNodePayload, GraphEdgePayload, litegraph::Directed>;
+
 struct PayloadMeta {
     bool output_checked{false};
     bool output_transferable{false};
@@ -553,9 +583,64 @@ struct TaskIr {
     std::vector<IrNode> nodes;
     std::vector<IrEdge> edges;
     std::vector<IrJoinGroup> join_groups;
+    mutable std::optional<ExecutionGraph> cached_graph;
+    mutable std::optional<bool> cached_graph_has_cycle;
+
+    void invalidate_graph_cache() noexcept {
+        cached_graph.reset();
+        cached_graph_has_cycle.reset();
+    }
+
+    Outcome<const ExecutionGraph*> dependency_graph() const {
+        if (cached_graph.has_value()) {
+            return &cached_graph.value();
+        }
+
+        ExecutionGraph dep_graph;
+        dep_graph.reserve_nodes(nodes.size());
+
+        std::unordered_map<std::size_t, litegraph::NodeId> id_map;
+        id_map.reserve(nodes.size());
+
+        for (const auto& node : nodes) {
+            litegraph::NodeId nid = dep_graph.add_node(GraphNodePayload{node.id, node.name});
+            id_map[node.id.value] = nid;
+        }
+
+        for (const auto& edge : edges) {
+            if (edge.kind != EdgeKind::Sequence && edge.kind != EdgeKind::Data) {
+                continue;
+            }
+            auto from_it = id_map.find(edge.from.value);
+            auto to_it = id_map.find(edge.to.value);
+            if (from_it == id_map.end() || to_it == id_map.end()) {
+                return std::unexpected(PravahaError{
+                    ErrorKind::ValidationError,
+                    "Invalid edge endpoint: TaskId not found in IR nodes"
+                });
+            }
+            dep_graph.add_edge(from_it->second, to_it->second, GraphEdgePayload{edge.kind});
+        }
+
+        cached_graph = std::move(dep_graph);
+        return &cached_graph.value();
+    }
+
+    Outcome<bool> dependency_graph_has_cycle() const {
+        if (cached_graph_has_cycle.has_value()) {
+            return cached_graph_has_cycle.value();
+        }
+        auto graph_result = dependency_graph();
+        if (!graph_result.has_value()) {
+            return std::unexpected(graph_result.error());
+        }
+        cached_graph_has_cycle = litegraph::has_cycle(*graph_result.value());
+        return cached_graph_has_cycle.value();
+    }
 
     TaskId add_node(std::string name, ExecutionDomain domain, TaskCommand cmd,
         std::size_t frontend_hash = 0, std::string frontend_dump = {}) {
+        invalidate_graph_cache();
         TaskId id{nodes.size()};
         nodes.emplace_back(id, std::move(name), domain, std::move(cmd));
         nodes.back().frontend_hash = frontend_hash;
@@ -563,10 +648,12 @@ struct TaskIr {
         return id;
     }
     void add_edge(TaskId from, TaskId to, EdgeKind kind) {
+        invalidate_graph_cache();
         edges.emplace_back(from, to, kind);
     }
     void add_join_group(std::vector<TaskId> members, JoinPolicy policy,
         std::size_t frontend_hash = 0, std::string frontend_dump = {}) {
+        invalidate_graph_cache();
         join_groups.push_back(IrJoinGroup{std::move(members), policy, frontend_hash, std::move(frontend_dump)});
     }
     [[nodiscard]] std::size_t node_count() const noexcept { return nodes.size(); }
@@ -945,41 +1032,6 @@ Outcome<TaskIr> lower_to_ir(Expr&& expr) {
 //  SECTION 8: LITEGRAPH VALIDATION LAYER
 // ============================================================================
 
-// ---------------------------------------------------------------------------
-// 8.1 Graph payload types
-// ---------------------------------------------------------------------------
-
-struct GraphNodePayload {
-    TaskId task_id;
-    std::string name;
-    bool operator==(const GraphNodePayload& o) const noexcept { return task_id == o.task_id && name == o.name; }
-};
-
-struct GraphEdgePayload {
-    EdgeKind kind;
-    bool operator==(const GraphEdgePayload& o) const noexcept { return kind == o.kind; }
-};
-
-} // namespace pravaha
-
-// std::hash specializations for LiteGraph Hashable concept
-template<> struct std::hash<pravaha::GraphNodePayload> {
-    std::size_t operator()(const pravaha::GraphNodePayload& p) const noexcept {
-        return std::hash<std::size_t>{}(p.task_id.value) ^ (std::hash<std::string>{}(p.name) << 1);
-    }
-};
-template<> struct std::hash<pravaha::GraphEdgePayload> {
-    std::size_t operator()(const pravaha::GraphEdgePayload& p) const noexcept {
-        return std::hash<int>{}(static_cast<int>(p.kind));
-    }
-};
-
-namespace pravaha {
-
-// ---------------------------------------------------------------------------
-// 8.2 ExecutionGraph alias
-// ---------------------------------------------------------------------------
-using ExecutionGraph = litegraph::Graph<GraphNodePayload, GraphEdgePayload, litegraph::Directed>;
 
 // ---------------------------------------------------------------------------
 // 8.3 to_litegraph - convert TaskIr to ExecutionGraph
@@ -1017,36 +1069,11 @@ inline Outcome<ExecutionGraph> to_litegraph(const TaskIr& ir) {
 // 8.4 validate_ir_with_litegraph - cycle detection and structural validation
 // ---------------------------------------------------------------------------
 inline Outcome<Unit> validate_ir_with_litegraph(const TaskIr& ir) {
-    // Build a graph containing only dependency edges (Sequence, Data)
-    ExecutionGraph dep_graph;
-    dep_graph.reserve_nodes(ir.nodes.size());
-
-    std::unordered_map<std::size_t, litegraph::NodeId> id_map;
-    id_map.reserve(ir.nodes.size());
-
-    for (const auto& node : ir.nodes) {
-        litegraph::NodeId nid = dep_graph.add_node(GraphNodePayload{node.id, node.name});
-        id_map[node.id.value] = nid;
+    auto has_cycle = ir.dependency_graph_has_cycle();
+    if (!has_cycle.has_value()) {
+        return std::unexpected(has_cycle.error());
     }
-
-    for (const auto& edge : ir.edges) {
-        // Only include dependency edges for cycle validation
-        if (edge.kind != EdgeKind::Sequence && edge.kind != EdgeKind::Data)
-            continue;
-
-        auto from_it = id_map.find(edge.from.value);
-        auto to_it = id_map.find(edge.to.value);
-        if (from_it == id_map.end() || to_it == id_map.end()) {
-            return std::unexpected(PravahaError{
-                ErrorKind::ValidationError,
-                "Invalid edge endpoint: TaskId not found in IR nodes"
-            });
-        }
-        dep_graph.add_edge(from_it->second, to_it->second, GraphEdgePayload{edge.kind});
-    }
-
-    // Use LiteGraph cycle detection
-    if (litegraph::has_cycle(dep_graph)) {
+    if (has_cycle.value()) {
         return std::unexpected(PravahaError{
             ErrorKind::CycleDetected,
             "Cycle detected in task dependency graph"
@@ -1060,44 +1087,25 @@ inline Outcome<Unit> validate_ir_with_litegraph(const TaskIr& ir) {
 // 8.5 topological_order - compute execution order using LiteGraph
 // ---------------------------------------------------------------------------
 inline Outcome<std::vector<TaskId>> topological_order(const TaskIr& ir) {
-    // Build dependency graph
-    ExecutionGraph dep_graph;
-    dep_graph.reserve_nodes(ir.nodes.size());
-
-    std::unordered_map<std::size_t, litegraph::NodeId> task_to_lite;
-    task_to_lite.reserve(ir.nodes.size());
-
-    for (const auto& node : ir.nodes) {
-        litegraph::NodeId nid = dep_graph.add_node(GraphNodePayload{node.id, node.name});
-        task_to_lite[node.id.value] = nid;
+    auto has_cycle = ir.dependency_graph_has_cycle();
+    if (!has_cycle.has_value()) {
+        return std::unexpected(has_cycle.error());
     }
-
-    for (const auto& edge : ir.edges) {
-        if (edge.kind != EdgeKind::Sequence && edge.kind != EdgeKind::Data)
-            continue;
-        auto from_it = task_to_lite.find(edge.from.value);
-        auto to_it = task_to_lite.find(edge.to.value);
-        if (from_it == task_to_lite.end() || to_it == task_to_lite.end()) {
-            return std::unexpected(PravahaError{
-                ErrorKind::ValidationError,
-                "Invalid edge endpoint in topological_order"
-            });
-        }
-        dep_graph.add_edge(from_it->second, to_it->second, GraphEdgePayload{edge.kind});
-    }
-
-    // Check for cycles first
-    if (litegraph::has_cycle(dep_graph)) {
+    if (has_cycle.value()) {
         return std::unexpected(PravahaError{
             ErrorKind::CycleDetected,
             "Cycle detected - topological order undefined"
         });
     }
 
-    // Use LiteGraph topological sort
+    auto graph_result = ir.dependency_graph();
+    if (!graph_result.has_value()) {
+        return std::unexpected(graph_result.error());
+    }
+    const auto& dep_graph = *graph_result.value();
+
     std::vector<litegraph::NodeId> topo = litegraph::topological_sort(dep_graph);
 
-    // Map back to TaskIds
     std::vector<TaskId> result;
     result.reserve(topo.size());
     for (const auto& nid : topo) {
