@@ -1124,6 +1124,14 @@ struct RunResult {
     TaskState final_state{TaskState::Succeeded};
     std::vector<TaskState> node_states;
     std::vector<PravahaError> errors;
+
+    [[nodiscard]] bool succeeded() const noexcept {
+        return final_state == TaskState::Succeeded;
+    }
+
+    [[nodiscard]] bool failed() const noexcept {
+        return final_state == TaskState::Failed;
+    }
 };
 
 struct JoinRuntimeState {

@@ -1427,7 +1427,7 @@ TEST_CASE("Runner join policy final_state semantics", "[pravaha][runner][paralle
         auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
         auto result = runner.submit(pravaha::any_success(std::move(a) & std::move(b)));
         REQUIRE(result.has_value());
-        REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+        REQUIRE(result->succeeded());
         REQUIRE_FALSE(result->errors.empty());
     }
 
@@ -1437,7 +1437,7 @@ TEST_CASE("Runner join policy final_state semantics", "[pravaha][runner][paralle
         auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
         auto result = runner.submit(pravaha::quorum<1>(std::move(a) & std::move(b)));
         REQUIRE(result.has_value());
-        REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+        REQUIRE(result->succeeded());
         REQUIRE_FALSE(result->errors.empty());
     }
 
@@ -1465,7 +1465,7 @@ TEST_CASE("Runner join policy final_state semantics", "[pravaha][runner][paralle
         auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
         auto result = runner.submit(pravaha::any_success(std::move(a) & std::move(b)));
         REQUIRE(result.has_value());
-        REQUIRE(result->final_state == pravaha::TaskState::Failed);
+        REQUIRE(result->failed());
     }
 
     SECTION("quorum<2>(success & fail) is Failed") {
@@ -1474,7 +1474,7 @@ TEST_CASE("Runner join policy final_state semantics", "[pravaha][runner][paralle
         auto b = pravaha::task("B", []() { throw std::runtime_error("B failed"); });
         auto result = runner.submit(pravaha::quorum<2>(std::move(a) & std::move(b)));
         REQUIRE(result.has_value());
-        REQUIRE(result->final_state == pravaha::TaskState::Failed);
+        REQUIRE(result->failed());
     }
 }
 
