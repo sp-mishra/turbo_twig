@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <string_view>
@@ -343,6 +344,12 @@ struct ParallelExpr {
 };
 
 template <typename Range, typename Init, typename MapFn, typename ReduceFn>
+struct ReduceResultHandle {
+    std::shared_ptr<std::optional<Init>> value;
+    std::shared_ptr<std::mutex> mutex;
+};
+
+template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 struct ParallelReduceExpr {
     Range range;
     Init init;
@@ -350,6 +357,9 @@ struct ParallelReduceExpr {
     ReduceFn reduce_fn;
     std::size_t chunk_size{};
     symbolic::LitheFrontendMeta frontend;
+    ReduceResultHandle<Range, Init, MapFn, ReduceFn> result_handle;
+
+    [[nodiscard]] const auto& result() const noexcept { return result_handle; }
 };
 
 template <typename F> requires std::move_constructible<std::decay_t<F>>
@@ -381,7 +391,8 @@ template <typename Range, typename Init, typename MapFn, typename ReduceFn>
         std::forward<MapFn>(map_fn),
         std::forward<ReduceFn>(reduce_fn),
         chunk_size,
-        {}
+        {},
+        {std::make_shared<std::optional<InitT>>(), std::make_shared<std::mutex>()}
     };
 
     const auto [has_size, range_size] = detail::range_size_hint(expr.range);
@@ -559,6 +570,8 @@ inline LowerResult merge_into(LowerResult& dst, LowerResult src) {
 template <typename F> LowerResult lower_impl(TaskExpr<F> expr);
 template <typename L, typename R> LowerResult lower_impl(SequenceExpr<L, R> expr);
 template <typename L, typename R> LowerResult lower_impl(ParallelExpr<L, R> expr);
+template <typename Range, typename Init, typename MapFn, typename ReduceFn>
+LowerResult lower_impl(ParallelReduceExpr<Range, Init, MapFn, ReduceFn> expr);
 
 template <typename T>
 PayloadMeta make_payload_meta() {
@@ -624,6 +637,121 @@ LowerResult lower_impl(ParallelExpr<L, R> expr) {
     for (auto t : right_remap.terminals) members.push_back(t);
     left_result.ir.add_join_group(std::move(members), expr.policy, expr.frontend.hash, expr.frontend.dump);
     return left_result;
+}
+
+template <typename Range, typename Init, typename MapFn, typename ReduceFn>
+LowerResult lower_impl(ParallelReduceExpr<Range, Init, MapFn, ReduceFn> expr) {
+    static_assert(requires(const Range& r) { r.size(); r[std::size_t{}]; });
+
+    LowerResult result;
+    const std::size_t total = static_cast<std::size_t>(expr.range.size());
+    const std::size_t chunk_size = (expr.chunk_size == 0) ? 1 : expr.chunk_size;
+
+    auto range_ptr = std::make_shared<Range>(std::move(expr.range));
+    auto map_ptr = std::make_shared<MapFn>(std::move(expr.map_fn));
+    auto reduce_ptr = std::make_shared<ReduceFn>(std::move(expr.reduce_fn));
+    const Init init_value = expr.init;
+
+    if (total == 0) {
+        auto values = std::make_shared<std::vector<Init>>(1, init_value);
+        auto out = expr.result_handle.value;
+        auto out_mutex = expr.result_handle.mutex;
+        auto final_cmd = TaskCommand::make([values, out, out_mutex]() {
+            if (out && out_mutex) {
+                std::lock_guard<std::mutex> lock(*out_mutex);
+                *out = (*values)[0];
+            }
+        });
+        TaskId final_id = result.ir.add_node(
+            "parallel_reduce.final",
+            ExecutionDomain::CPU,
+            std::move(final_cmd),
+            expr.frontend.hash,
+            expr.frontend.dump
+        );
+        result.starts.push_back(final_id);
+        result.terminals.push_back(final_id);
+        return result;
+    }
+
+    const std::size_t num_chunks = (total + chunk_size - 1) / chunk_size;
+    auto values = std::make_shared<std::vector<Init>>(std::max<std::size_t>(1, 2 * num_chunks), init_value);
+    std::vector<TaskId> slot_node(values->size(), invalid_task_id);
+
+    for (std::size_t i = 0; i < num_chunks; ++i) {
+        const std::size_t begin = i * chunk_size;
+        const std::size_t end = std::min(begin + chunk_size, total);
+        auto chunk_cmd = TaskCommand::make([i, begin, end, values, range_ptr, map_ptr, reduce_ptr, init_value]() {
+            Init partial = init_value;
+            for (std::size_t idx = begin; idx < end; ++idx) {
+                partial = std::invoke(*reduce_ptr, std::move(partial), std::invoke(*map_ptr, (*range_ptr)[idx]));
+            }
+            (*values)[i] = std::move(partial);
+        });
+        TaskId chunk_id = result.ir.add_node(
+            "parallel_reduce.chunk." + std::to_string(i),
+            ExecutionDomain::CPU,
+            std::move(chunk_cmd),
+            expr.frontend.hash,
+            expr.frontend.dump
+        );
+        result.starts.push_back(chunk_id);
+        slot_node[i] = chunk_id;
+    }
+
+    std::vector<std::size_t> level_slots;
+    level_slots.reserve(num_chunks);
+    for (std::size_t i = 0; i < num_chunks; ++i) level_slots.push_back(i);
+    std::size_t next_slot = num_chunks;
+
+    while (level_slots.size() > 1) {
+        std::vector<std::size_t> next_level;
+        next_level.reserve((level_slots.size() + 1) / 2);
+        for (std::size_t i = 0; i + 1 < level_slots.size(); i += 2) {
+            const std::size_t left_slot = level_slots[i];
+            const std::size_t right_slot = level_slots[i + 1];
+            const std::size_t parent_slot = next_slot++;
+
+            auto reduce_cmd = TaskCommand::make([left_slot, right_slot, parent_slot, values, reduce_ptr]() {
+                (*values)[parent_slot] = std::invoke(*reduce_ptr, (*values)[left_slot], (*values)[right_slot]);
+            });
+            TaskId reduce_id = result.ir.add_node(
+                "parallel_reduce.reduce." + std::to_string(parent_slot),
+                ExecutionDomain::CPU,
+                std::move(reduce_cmd),
+                expr.frontend.hash,
+                expr.frontend.dump
+            );
+            result.ir.add_edge(slot_node[left_slot], reduce_id, EdgeKind::Sequence);
+            result.ir.add_edge(slot_node[right_slot], reduce_id, EdgeKind::Sequence);
+            slot_node[parent_slot] = reduce_id;
+            next_level.push_back(parent_slot);
+        }
+        if (level_slots.size() % 2 == 1) {
+            next_level.push_back(level_slots.back());
+        }
+        level_slots = std::move(next_level);
+    }
+
+    const std::size_t root_slot = level_slots.front();
+    auto out = expr.result_handle.value;
+    auto out_mutex = expr.result_handle.mutex;
+    auto final_cmd = TaskCommand::make([root_slot, values, out, out_mutex]() {
+        if (out && out_mutex) {
+            std::lock_guard<std::mutex> lock(*out_mutex);
+            *out = (*values)[root_slot];
+        }
+    });
+    TaskId final_id = result.ir.add_node(
+        "parallel_reduce.final",
+        ExecutionDomain::CPU,
+        std::move(final_cmd),
+        expr.frontend.hash,
+        expr.frontend.dump
+    );
+    result.ir.add_edge(slot_node[root_slot], final_id, EdgeKind::Sequence);
+    result.terminals.push_back(final_id);
+    return result;
 }
 
 } // namespace detail

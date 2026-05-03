@@ -2580,6 +2580,101 @@ TEST_CASE("parallel_reduce now returns lazy expression", "[pravaha][reduce][lazy
     STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(seq)>);
 }
 
+TEST_CASE("Runner submit executes lazy parallel_reduce and stores result", "[pravaha][reduce][lazy]") {
+    std::vector<int> data = {1, 2, 3, 4, 5};
+    std::atomic<int> calls{0};
+
+    auto expr = pravaha::parallel_reduce(
+        data,
+        0,
+        [&calls](int x) {
+            calls.fetch_add(1);
+            return x;
+        },
+        [&calls](int a, int b) {
+            calls.fetch_add(1);
+            return a + b;
+        },
+        2
+    );
+    auto handle = expr.result();
+    pravaha::Runner<> runner;
+    auto run = runner.submit(std::move(expr));
+    REQUIRE(run.has_value());
+    REQUIRE(calls.load() > 0);
+    REQUIRE(handle.value != nullptr);
+    REQUIRE(handle.mutex != nullptr);
+    {
+        std::lock_guard<std::mutex> lock(*handle.mutex);
+        REQUIRE(handle.value->has_value());
+        REQUIRE(handle.value->value() == 15);
+    }
+}
+
+TEST_CASE("lazy parallel_reduce composes with sequence and parallel operators", "[pravaha][reduce][lazy]") {
+    std::vector<int> data = {1, 2, 3, 4};
+
+    {
+        bool after_ran = false;
+        auto expr = pravaha::parallel_reduce(
+            data,
+            0,
+            [](int x) { return x; },
+            [](int a, int b) { return a + b; },
+            2
+        );
+        auto handle = expr.result();
+        auto graph = std::move(expr) | pravaha::task("after", [&after_ran]() { after_ran = true; });
+        pravaha::Runner<> runner;
+        auto run = runner.submit(std::move(graph));
+        REQUIRE(run.has_value());
+        REQUIRE(after_ran);
+        std::lock_guard<std::mutex> lock(*handle.mutex);
+        REQUIRE(handle.value->has_value());
+        REQUIRE(handle.value->value() == 10);
+    }
+
+    {
+        bool before_ran = false;
+        auto expr = pravaha::parallel_reduce(
+            data,
+            0,
+            [](int x) { return x; },
+            [](int a, int b) { return a + b; },
+            2
+        );
+        auto handle = expr.result();
+        auto graph = pravaha::task("before", [&before_ran]() { before_ran = true; }) | std::move(expr);
+        pravaha::Runner<> runner;
+        auto run = runner.submit(std::move(graph));
+        REQUIRE(run.has_value());
+        REQUIRE(before_ran);
+        std::lock_guard<std::mutex> lock(*handle.mutex);
+        REQUIRE(handle.value->has_value());
+        REQUIRE(handle.value->value() == 10);
+    }
+
+    {
+        bool b_ran = false;
+        auto expr = pravaha::parallel_reduce(
+            data,
+            0,
+            [](int x) { return x; },
+            [](int a, int b) { return a + b; },
+            2
+        );
+        auto handle = expr.result();
+        auto graph = std::move(expr) & pravaha::task("b", [&b_ran]() { b_ran = true; });
+        pravaha::Runner<> runner;
+        auto run = runner.submit(std::move(graph));
+        REQUIRE(run.has_value());
+        REQUIRE(b_ran);
+        std::lock_guard<std::mutex> lock(*handle.mutex);
+        REQUIRE(handle.value->has_value());
+        REQUIRE(handle.value->value() == 10);
+    }
+}
+
 TEST_CASE("parallel_reduce - sum of vector<int>", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     pravaha::Runner<> runner;
