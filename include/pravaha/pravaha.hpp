@@ -280,18 +280,28 @@ LitheFrontendMeta make_parallel_meta(std::size_t left_hash, std::size_t right_ha
 LitheFrontendMeta make_collect_all_meta(std::size_t expr_hash);
 LitheFrontendMeta make_any_success_meta(std::size_t expr_hash);
 LitheFrontendMeta make_quorum_meta(std::size_t expr_hash, std::size_t required);
+LitheFrontendMeta make_parallel_reduce_meta(std::size_t chunk_size, std::size_t range_size, bool has_range_size);
 } // namespace lithe_frontend
 } // namespace symbolic
 
 template <typename F> class TaskExpr;
 template <typename L, typename R> struct SequenceExpr;
 template <typename L, typename R> struct ParallelExpr;
+template <typename Range, typename Init, typename MapFn, typename ReduceFn> struct ParallelReduceExpr;
 
 namespace detail {
 template <typename T> struct is_pravaha_expr_impl : std::false_type {};
 template <typename F> struct is_pravaha_expr_impl<TaskExpr<F>> : std::true_type {};
 template <typename L, typename R> struct is_pravaha_expr_impl<SequenceExpr<L, R>> : std::true_type {};
 template <typename L, typename R> struct is_pravaha_expr_impl<ParallelExpr<L, R>> : std::true_type {};
+
+template <typename RangeLike>
+[[nodiscard]] auto range_size_hint(const RangeLike& range) {
+    if constexpr (requires { range.size(); }) {
+        return std::pair<bool, std::size_t>{true, static_cast<std::size_t>(range.size())};
+    }
+    return std::pair<bool, std::size_t>{false, 0};
+}
 } // namespace detail
 
 template <typename T>
@@ -330,6 +340,16 @@ struct ParallelExpr {
           frontend{symbolic::lithe_frontend::make_parallel_meta(left.frontend.hash, right.frontend.hash)} {}
 };
 
+template <typename Range, typename Init, typename MapFn, typename ReduceFn>
+struct ParallelReduceExpr {
+    Range range;
+    Init init;
+    MapFn map_fn;
+    ReduceFn reduce_fn;
+    std::size_t chunk_size{};
+    symbolic::LitheFrontendMeta frontend;
+};
+
 template <typename F> requires std::move_constructible<std::decay_t<F>>
 [[nodiscard]] auto task(std::string name, F&& callable) {
     return TaskExpr<std::decay_t<F>>{std::move(name), std::forward<F>(callable)};
@@ -338,6 +358,33 @@ template <typename F> requires std::move_constructible<std::decay_t<F>>
 template <typename F> requires std::move_constructible<std::decay_t<F>>
 [[nodiscard]] auto task_on(ExecutionDomain domain, std::string name, F&& callable) {
     return TaskExpr<std::decay_t<F>>{std::move(name), std::forward<F>(callable), domain};
+}
+
+template <typename Range, typename Init, typename MapFn, typename ReduceFn>
+[[nodiscard]] auto lazy_parallel_reduce(
+    Range&& range,
+    Init init,
+    MapFn&& map_fn,
+    ReduceFn&& reduce_fn,
+    std::size_t chunk_size = 1024
+) {
+    using RangeT = std::decay_t<Range>;
+    using InitT = std::decay_t<Init>;
+    using MapFnT = std::decay_t<MapFn>;
+    using ReduceFnT = std::decay_t<ReduceFn>;
+
+    ParallelReduceExpr<RangeT, InitT, MapFnT, ReduceFnT> expr{
+        std::forward<Range>(range),
+        std::move(init),
+        std::forward<MapFn>(map_fn),
+        std::forward<ReduceFn>(reduce_fn),
+        chunk_size,
+        {}
+    };
+
+    const auto [has_size, range_size] = detail::range_size_hint(expr.range);
+    expr.frontend = symbolic::lithe_frontend::make_parallel_reduce_meta(chunk_size, range_size, has_size);
+    return expr;
 }
 
 template <IsPravahaExpr L, IsPravahaExpr R>
@@ -1715,6 +1762,7 @@ struct parallel_tag {};
 struct collect_all_tag {};
 struct any_success_tag {};
 struct quorum_tag {};
+struct parallel_reduce_tag {};
 struct keyword_tag {};
 struct identifier_tag {};
 struct token_tag {};
@@ -1784,6 +1832,11 @@ struct tag_name<pravaha::symbolic::lithe_frontend::any_success_tag> {
 template<>
 struct tag_name<pravaha::symbolic::lithe_frontend::quorum_tag> {
     static constexpr const char* value = "pravaha.quorum";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::parallel_reduce_tag> {
+    static constexpr const char* value = "pravaha.parallel_reduce";
 };
 
 template<>
@@ -1897,6 +1950,14 @@ inline auto quorum_expr(Expr&& expr, std::size_t required) {
     return lithe::make_node<quorum_tag>(
         lithe::as_expr(required),
         std::forward<Expr>(expr)
+    );
+}
+
+inline auto parallel_reduce_expr(std::size_t chunk_size, std::size_t range_size, bool has_range_size) {
+    return lithe::make_node<parallel_reduce_tag>(
+        lithe::as_expr(chunk_size),
+        lithe::as_expr(range_size),
+        lithe::as_expr(has_range_size)
     );
 }
 
@@ -2165,6 +2226,15 @@ inline LitheFrontendMeta make_any_success_meta(std::size_t expr_hash) {
 inline LitheFrontendMeta make_quorum_meta(std::size_t expr_hash, std::size_t required) {
     const auto expr = quorum_expr(lithe::as_expr(expr_hash), required);
     return make_meta(expr);
+}
+
+inline LitheFrontendMeta make_parallel_reduce_meta(std::size_t chunk_size, std::size_t range_size, bool has_range_size) {
+    const auto expr = parallel_reduce_expr(chunk_size, range_size, has_range_size);
+    auto meta = make_meta(expr);
+    meta.hash ^= (std::hash<std::size_t>{}(chunk_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    meta.hash ^= (std::hash<std::size_t>{}(range_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    meta.hash ^= (std::hash<bool>{}(has_range_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    return meta;
 }
 
 } // namespace lithe_frontend

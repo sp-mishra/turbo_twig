@@ -2514,6 +2514,46 @@ TEST_CASE("parallel_reduce is currently eager", "[pravaha][reduce]") {
     REQUIRE(calls.load() > 0);
 }
 
+TEST_CASE("lazy_parallel_reduce construction metadata", "[pravaha][reduce][lazy]") {
+    std::vector<int> data = {1, 2, 3, 4};
+    std::atomic<int> calls{0};
+
+    auto make_expr = [&](std::size_t chunk_size) {
+        return pravaha::lazy_parallel_reduce(
+            data,
+            0,
+            [&calls](int x) {
+                calls.fetch_add(1);
+                return x;
+            },
+            [&calls](int a, int b) {
+                calls.fetch_add(1);
+                return a + b;
+            },
+            chunk_size
+        );
+    };
+
+    SECTION("constructing lazy_parallel_reduce does not execute callables") {
+        auto expr = make_expr(2);
+        REQUIRE(calls.load() == 0);
+        REQUIRE(expr.frontend.hash != 0);
+        REQUIRE_FALSE(expr.frontend.dump.empty());
+    }
+
+    SECTION("same construction shape gives stable hash") {
+        auto expr1 = make_expr(2);
+        auto expr2 = make_expr(2);
+        REQUIRE(expr1.frontend.hash == expr2.frontend.hash);
+    }
+
+    SECTION("different chunk_size gives different hash") {
+        auto expr1 = make_expr(2);
+        auto expr2 = make_expr(3);
+        REQUIRE(expr1.frontend.hash != expr2.frontend.hash);
+    }
+}
+
 TEST_CASE("parallel_reduce - sum of vector<int>", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     pravaha::Runner<> runner;
