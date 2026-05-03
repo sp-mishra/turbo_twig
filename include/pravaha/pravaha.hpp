@@ -1412,7 +1412,8 @@ struct RuntimeState {
 
         auto& join = joins[group_id];
         const bool was_resolved = join.resolved;
-        if (join.resolved && join.success && join.policy.kind == JoinPolicyKind::AnySuccess) {
+        if (join.resolved && join.success
+            && (join.policy.kind == JoinPolicyKind::AnySuccess || join.policy.kind == JoinPolicyKind::Quorum)) {
             return;
         }
 

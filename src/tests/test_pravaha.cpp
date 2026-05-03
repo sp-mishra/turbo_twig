@@ -881,6 +881,55 @@ TEST_CASE("join runtime state - member accounting prevents double count", "[prav
     REQUIRE(state.joins[0].succeeded == 1);
 }
 
+TEST_CASE("join runtime state - AnySuccess ignores late terminal updates after success", "[pravaha][runtime][join]") {
+    pravaha::RuntimeState state;
+    state.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::AnySuccess, 0}, 2});
+
+    state.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(state.joins[0].resolved == true);
+    REQUIRE(state.joins[0].success == true);
+    REQUIRE(state.joins[0].succeeded == 1);
+    REQUIRE(state.joins[0].failed == 0);
+
+    state.record_join_terminal(0, pravaha::TaskState::Failed);
+    REQUIRE(state.joins[0].resolved == true);
+    REQUIRE(state.joins[0].success == true);
+    REQUIRE(state.joins[0].succeeded == 1);
+    REQUIRE(state.joins[0].failed == 0);
+}
+
+TEST_CASE("join runtime state - Quorum ignores late terminal updates after success", "[pravaha][runtime][join]") {
+    pravaha::RuntimeState state;
+    state.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::Quorum, 1}, 2});
+
+    state.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(state.joins[0].resolved == true);
+    REQUIRE(state.joins[0].success == true);
+    REQUIRE(state.joins[0].succeeded == 1);
+    REQUIRE(state.joins[0].failed == 0);
+
+    state.record_join_terminal(0, pravaha::TaskState::Failed);
+    REQUIRE(state.joins[0].resolved == true);
+    REQUIRE(state.joins[0].success == true);
+    REQUIRE(state.joins[0].succeeded == 1);
+    REQUIRE(state.joins[0].failed == 0);
+}
+
+TEST_CASE("join runtime state - CollectAll continues counting after partial success", "[pravaha][runtime][join]") {
+    pravaha::RuntimeState state;
+    state.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::CollectAll, 0}, 2});
+
+    state.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(state.joins[0].resolved == false);
+    REQUIRE(state.joins[0].succeeded == 1);
+
+    state.record_join_terminal(0, pravaha::TaskState::Failed);
+    REQUIRE(state.joins[0].resolved == true);
+    REQUIRE(state.joins[0].success == false);
+    REQUIRE(state.joins[0].succeeded == 1);
+    REQUIRE(state.joins[0].failed == 1);
+}
+
 TEST_CASE("join runtime state - AnySuccess releases downstream on first success", "[pravaha][runtime][join][early-release]") {
     pravaha::TaskIr ir;
     ir.add_node("fast_success", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
@@ -1379,6 +1428,7 @@ TEST_CASE("Runner join policy final_state semantics", "[pravaha][runner][paralle
         auto result = runner.submit(pravaha::any_success(std::move(a) & std::move(b)));
         REQUIRE(result.has_value());
         REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+        REQUIRE_FALSE(result->errors.empty());
     }
 
     SECTION("quorum<1>(success & fail) is Succeeded") {
@@ -1388,6 +1438,7 @@ TEST_CASE("Runner join policy final_state semantics", "[pravaha][runner][paralle
         auto result = runner.submit(pravaha::quorum<1>(std::move(a) & std::move(b)));
         REQUIRE(result.has_value());
         REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+        REQUIRE_FALSE(result->errors.empty());
     }
 
     SECTION("collect_all(success & fail) is Failed") {
