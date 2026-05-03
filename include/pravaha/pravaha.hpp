@@ -1653,6 +1653,7 @@ class JThreadBackend {
     std::condition_variable_any cv_work_;
     std::condition_variable_any cv_drain_;
     std::deque<TaskCommand> queue_;
+    std::size_t queue_capacity_{0};
     std::atomic<bool> stop_requested_{false};
     std::atomic<std::size_t> in_flight_{0};
     std::vector<std::jthread> workers_;
@@ -1675,7 +1676,8 @@ class JThreadBackend {
     }
 
 public:
-    explicit JThreadBackend(std::size_t worker_count = 0) {
+    explicit JThreadBackend(std::size_t worker_count = 0, std::size_t queue_capacity = 0)
+        : queue_capacity_{queue_capacity} {
         if (worker_count == 0) {
             worker_count = std::thread::hardware_concurrency();
             if (worker_count == 0) worker_count = 1;
@@ -1702,6 +1704,9 @@ public:
         {
             std::lock_guard lock(mutex_);
             if (stop_requested_.load(std::memory_order_acquire)) {
+                return false;
+            }
+            if (queue_capacity_ != 0 && queue_.size() >= queue_capacity_) {
                 return false;
             }
             in_flight_.fetch_add(1, std::memory_order_release);

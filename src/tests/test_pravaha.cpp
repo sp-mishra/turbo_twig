@@ -1486,6 +1486,36 @@ TEST_CASE("JThreadBackend - no graph logic in backend", "[pravaha][jthread]") {
     REQUIRE(val.load() == 42);
 }
 
+TEST_CASE("JThreadBackend - bounded queue rejects when full", "[pravaha][jthread]") {
+    std::mutex gate_mutex;
+    std::condition_variable gate_cv;
+    bool started = false;
+    bool release = false;
+
+    pravaha::JThreadBackend backend(1, 1);
+    REQUIRE(backend.submit(pravaha::TaskCommand::make([&]() {
+        std::unique_lock lock(gate_mutex);
+        started = true;
+        gate_cv.notify_all();
+        gate_cv.wait(lock, [&]() { return release; });
+    })));
+
+    {
+        std::unique_lock lock(gate_mutex);
+        gate_cv.wait(lock, [&]() { return started; });
+    }
+
+    REQUIRE(backend.submit(pravaha::TaskCommand::make([]() {})));
+    REQUIRE_FALSE(backend.submit(pravaha::TaskCommand::make([]() {})));
+
+    {
+        std::lock_guard lock(gate_mutex);
+        release = true;
+    }
+    gate_cv.notify_all();
+    backend.drain();
+}
+
 TEST_CASE("JThreadBackend - submit after stop is rejected and drain returns", "[pravaha][jthread][regression]") {
     std::atomic<int> counter{0};
     pravaha::JThreadBackend backend(2);
@@ -1511,6 +1541,43 @@ TEST_CASE("Runner<JThreadBackend> - stopped backend submit is reported and does 
         err_kind == pravaha::ErrorKind::QueueRejected
         || err_kind == pravaha::ErrorKind::TaskFailed;
     REQUIRE(accepted_kind);
+}
+
+TEST_CASE("Runner<JThreadBackend> - bounded queue rejection does not deadlock", "[pravaha][jthread][runner][regression]") {
+    std::mutex gate_mutex;
+    std::condition_variable gate_cv;
+    bool started = false;
+    bool release = false;
+
+    pravaha::JThreadBackend backend(1, 1);
+    REQUIRE(backend.submit(pravaha::TaskCommand::make([&]() {
+        std::unique_lock lock(gate_mutex);
+        started = true;
+        gate_cv.notify_all();
+        gate_cv.wait(lock, [&]() { return release; });
+    })));
+
+    {
+        std::unique_lock lock(gate_mutex);
+        gate_cv.wait(lock, [&]() { return started; });
+    }
+
+    REQUIRE(backend.submit(pravaha::TaskCommand::make([]() {})));
+
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+    auto result = runner.submit(pravaha::task("A", []() {}));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    REQUIRE_FALSE(result->errors.empty());
+    REQUIRE(result->errors.front().kind == pravaha::ErrorKind::QueueRejected);
+
+    {
+        std::lock_guard lock(gate_mutex);
+        release = true;
+    }
+    gate_cv.notify_all();
+    backend.drain();
 }
 
 // ============================================================================
