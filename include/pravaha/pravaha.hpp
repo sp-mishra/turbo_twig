@@ -282,6 +282,8 @@ LitheFrontendMeta make_collect_all_meta(std::size_t expr_hash);
 LitheFrontendMeta make_any_success_meta(std::size_t expr_hash);
 LitheFrontendMeta make_quorum_meta(std::size_t expr_hash, std::size_t required);
 LitheFrontendMeta make_parallel_reduce_meta(std::size_t chunk_size, std::size_t range_size, bool has_range_size);
+LitheFrontendMeta make_parallel_for_meta(std::size_t chunk_size, std::size_t range_size, bool has_range_size);
+LitheFrontendMeta make_parallel_transform_meta(std::size_t chunk_size, std::size_t range_size, bool has_range_size);
 } // namespace lithe_frontend
 } // namespace symbolic
 
@@ -289,6 +291,8 @@ template <typename F> class TaskExpr;
 template <typename L, typename R> struct SequenceExpr;
 template <typename L, typename R> struct ParallelExpr;
 template <typename Range, typename Init, typename MapFn, typename ReduceFn> struct ParallelReduceExpr;
+template <typename Range, typename BodyFn> struct ParallelForExpr;
+template <typename Range, typename TransformFn> struct ParallelTransformExpr;
 
 namespace detail {
 template <typename T> struct is_pravaha_expr_impl : std::false_type {};
@@ -297,6 +301,10 @@ template <typename L, typename R> struct is_pravaha_expr_impl<SequenceExpr<L, R>
 template <typename L, typename R> struct is_pravaha_expr_impl<ParallelExpr<L, R>> : std::true_type {};
 template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 struct is_pravaha_expr_impl<ParallelReduceExpr<Range, Init, MapFn, ReduceFn>> : std::true_type {};
+template <typename Range, typename BodyFn>
+struct is_pravaha_expr_impl<ParallelForExpr<Range, BodyFn>> : std::true_type {};
+template <typename Range, typename TransformFn>
+struct is_pravaha_expr_impl<ParallelTransformExpr<Range, TransformFn>> : std::true_type {};
 
 template <typename RangeLike>
 [[nodiscard]] auto range_size_hint(const RangeLike& range) {
@@ -362,6 +370,23 @@ struct ParallelReduceExpr {
     [[nodiscard]] const ReduceResultHandle<Init>& result() const noexcept { return result_handle; }
 };
 
+template <typename Range, typename BodyFn>
+struct ParallelForExpr {
+    std::string name;
+    Range range;
+    std::size_t chunk_size{};
+    BodyFn body;
+    symbolic::LitheFrontendMeta frontend;
+};
+
+template <typename Range, typename TransformFn>
+struct ParallelTransformExpr {
+    Range range;
+    std::size_t chunk_size{};
+    TransformFn transform;
+    symbolic::LitheFrontendMeta frontend;
+};
+
 template <typename F> requires std::move_constructible<std::decay_t<F>>
 [[nodiscard]] auto task(std::string name, F&& callable) {
     return TaskExpr<std::decay_t<F>>{std::move(name), std::forward<F>(callable)};
@@ -397,6 +422,39 @@ template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 
     const auto [has_size, range_size] = detail::range_size_hint(expr.range);
     expr.frontend = symbolic::lithe_frontend::make_parallel_reduce_meta(chunk_size, range_size, has_size);
+    return expr;
+}
+
+template <typename Range, typename BodyFn>
+[[nodiscard]] auto lazy_parallel_for(std::string name, Range&& range, std::size_t chunk_size, BodyFn&& body) {
+    using RangeT = std::decay_t<Range>;
+    using BodyT = std::decay_t<BodyFn>;
+
+    ParallelForExpr<RangeT, BodyT> expr{
+        std::move(name),
+        std::forward<Range>(range),
+        chunk_size,
+        std::forward<BodyFn>(body),
+        {}
+    };
+    const auto [has_size, range_size] = detail::range_size_hint(expr.range);
+    expr.frontend = symbolic::lithe_frontend::make_parallel_for_meta(chunk_size, range_size, has_size);
+    return expr;
+}
+
+template <typename Range, typename TransformFn>
+[[nodiscard]] auto lazy_parallel_transform(Range&& range, std::size_t chunk_size, TransformFn&& transform) {
+    using RangeT = std::decay_t<Range>;
+    using TransformT = std::decay_t<TransformFn>;
+
+    ParallelTransformExpr<RangeT, TransformT> expr{
+        std::forward<Range>(range),
+        chunk_size,
+        std::forward<TransformFn>(transform),
+        {}
+    };
+    const auto [has_size, range_size] = detail::range_size_hint(expr.range);
+    expr.frontend = symbolic::lithe_frontend::make_parallel_transform_meta(chunk_size, range_size, has_size);
     return expr;
 }
 
@@ -572,6 +630,10 @@ template <typename L, typename R> LowerResult lower_impl(SequenceExpr<L, R> expr
 template <typename L, typename R> LowerResult lower_impl(ParallelExpr<L, R> expr);
 template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 LowerResult lower_impl(ParallelReduceExpr<Range, Init, MapFn, ReduceFn> expr);
+template <typename Range, typename BodyFn>
+LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr);
+template <typename Range, typename TransformFn>
+LowerResult lower_impl(ParallelTransformExpr<Range, TransformFn> expr);
 
 template <typename T>
 PayloadMeta make_payload_meta() {
@@ -751,6 +813,95 @@ LowerResult lower_impl(ParallelReduceExpr<Range, Init, MapFn, ReduceFn> expr) {
     );
     result.ir.add_edge(slot_node[root_slot], final_id, EdgeKind::Sequence);
     result.terminals.push_back(final_id);
+    return result;
+}
+
+template <typename Range, typename BodyFn>
+LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr) {
+    static_assert(requires(const Range& r) { r.size(); });
+
+    LowerResult result;
+    const std::size_t total = static_cast<std::size_t>(expr.range.size());
+    const std::size_t chunk_size = (expr.chunk_size == 0) ? 1 : expr.chunk_size;
+    const std::size_t num_chunks = (total == 0) ? 0 : (total + chunk_size - 1) / chunk_size;
+
+    auto body_ptr = std::make_shared<BodyFn>(std::move(expr.body));
+    if (num_chunks == 0) {
+        auto cmd = TaskCommand::make([]() {});
+        TaskId id = result.ir.add_node(
+            expr.name + ".empty",
+            ExecutionDomain::CPU,
+            std::move(cmd),
+            expr.frontend.hash,
+            expr.frontend.dump
+        );
+        result.starts.push_back(id);
+        result.terminals.push_back(id);
+        return result;
+    }
+
+    for (std::size_t i = 0; i < num_chunks; ++i) {
+        const std::size_t begin = i * chunk_size;
+        const std::size_t end = std::min(begin + chunk_size, total);
+        auto cmd = TaskCommand::make([body_ptr, begin, end]() {
+            std::invoke(*body_ptr, begin, end);
+        });
+        TaskId id = result.ir.add_node(
+            expr.name + ".chunk." + std::to_string(i),
+            ExecutionDomain::CPU,
+            std::move(cmd),
+            expr.frontend.hash,
+            expr.frontend.dump
+        );
+        result.starts.push_back(id);
+        result.terminals.push_back(id);
+    }
+    return result;
+}
+
+template <typename Range, typename TransformFn>
+LowerResult lower_impl(ParallelTransformExpr<Range, TransformFn> expr) {
+    static_assert(requires(const Range& r) { r.size(); r[std::size_t{}]; });
+
+    LowerResult result;
+    const std::size_t total = static_cast<std::size_t>(expr.range.size());
+    const std::size_t chunk_size = (expr.chunk_size == 0) ? 1 : expr.chunk_size;
+    const std::size_t num_chunks = (total == 0) ? 0 : (total + chunk_size - 1) / chunk_size;
+
+    auto range_ptr = std::make_shared<Range>(std::move(expr.range));
+    auto transform_ptr = std::make_shared<TransformFn>(std::move(expr.transform));
+    if (num_chunks == 0) {
+        auto cmd = TaskCommand::make([]() {});
+        TaskId id = result.ir.add_node(
+            "parallel_transform.empty",
+            ExecutionDomain::CPU,
+            std::move(cmd),
+            expr.frontend.hash,
+            expr.frontend.dump
+        );
+        result.starts.push_back(id);
+        result.terminals.push_back(id);
+        return result;
+    }
+
+    for (std::size_t i = 0; i < num_chunks; ++i) {
+        const std::size_t begin = i * chunk_size;
+        const std::size_t end = std::min(begin + chunk_size, total);
+        auto cmd = TaskCommand::make([range_ptr, transform_ptr, begin, end]() {
+            for (std::size_t idx = begin; idx < end; ++idx) {
+                std::invoke(*transform_ptr, (*range_ptr)[idx]);
+            }
+        });
+        TaskId id = result.ir.add_node(
+            "parallel_transform.chunk." + std::to_string(i),
+            ExecutionDomain::CPU,
+            std::move(cmd),
+            expr.frontend.hash,
+            expr.frontend.dump
+        );
+        result.starts.push_back(id);
+        result.terminals.push_back(id);
+    }
     return result;
 }
 
@@ -1893,6 +2044,8 @@ struct collect_all_tag {};
 struct any_success_tag {};
 struct quorum_tag {};
 struct parallel_reduce_tag {};
+struct parallel_for_tag {};
+struct parallel_transform_tag {};
 struct keyword_tag {};
 struct identifier_tag {};
 struct token_tag {};
@@ -1967,6 +2120,16 @@ struct tag_name<pravaha::symbolic::lithe_frontend::quorum_tag> {
 template<>
 struct tag_name<pravaha::symbolic::lithe_frontend::parallel_reduce_tag> {
     static constexpr const char* value = "pravaha.parallel_reduce";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::parallel_for_tag> {
+    static constexpr const char* value = "pravaha.parallel_for";
+};
+
+template<>
+struct tag_name<pravaha::symbolic::lithe_frontend::parallel_transform_tag> {
+    static constexpr const char* value = "pravaha.parallel_transform";
 };
 
 template<>
@@ -2085,6 +2248,22 @@ inline auto quorum_expr(Expr&& expr, std::size_t required) {
 
 inline auto parallel_reduce_expr(std::size_t chunk_size, std::size_t range_size, bool has_range_size) {
     return lithe::make_node<parallel_reduce_tag>(
+        lithe::as_expr(chunk_size),
+        lithe::as_expr(range_size),
+        lithe::as_expr(has_range_size)
+    );
+}
+
+inline auto parallel_for_expr(std::size_t chunk_size, std::size_t range_size, bool has_range_size) {
+    return lithe::make_node<parallel_for_tag>(
+        lithe::as_expr(chunk_size),
+        lithe::as_expr(range_size),
+        lithe::as_expr(has_range_size)
+    );
+}
+
+inline auto parallel_transform_expr(std::size_t chunk_size, std::size_t range_size, bool has_range_size) {
+    return lithe::make_node<parallel_transform_tag>(
         lithe::as_expr(chunk_size),
         lithe::as_expr(range_size),
         lithe::as_expr(has_range_size)
@@ -2360,6 +2539,24 @@ inline LitheFrontendMeta make_quorum_meta(std::size_t expr_hash, std::size_t req
 
 inline LitheFrontendMeta make_parallel_reduce_meta(std::size_t chunk_size, std::size_t range_size, bool has_range_size) {
     const auto expr = parallel_reduce_expr(chunk_size, range_size, has_range_size);
+    auto meta = make_meta(expr);
+    meta.hash ^= (std::hash<std::size_t>{}(chunk_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    meta.hash ^= (std::hash<std::size_t>{}(range_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    meta.hash ^= (std::hash<bool>{}(has_range_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    return meta;
+}
+
+inline LitheFrontendMeta make_parallel_for_meta(std::size_t chunk_size, std::size_t range_size, bool has_range_size) {
+    const auto expr = parallel_for_expr(chunk_size, range_size, has_range_size);
+    auto meta = make_meta(expr);
+    meta.hash ^= (std::hash<std::size_t>{}(chunk_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    meta.hash ^= (std::hash<std::size_t>{}(range_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    meta.hash ^= (std::hash<bool>{}(has_range_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
+    return meta;
+}
+
+inline LitheFrontendMeta make_parallel_transform_meta(std::size_t chunk_size, std::size_t range_size, bool has_range_size) {
+    const auto expr = parallel_transform_expr(chunk_size, range_size, has_range_size);
     auto meta = make_meta(expr);
     meta.hash ^= (std::hash<std::size_t>{}(chunk_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
     meta.hash ^= (std::hash<std::size_t>{}(range_size) + 0x9e3779b97f4a7c15ULL + (meta.hash << 6) + (meta.hash >> 2));
@@ -2897,7 +3094,7 @@ struct ParallelForResult {
 
 template <typename Range, typename F>
     requires std::invocable<F, std::size_t, std::size_t>
-auto parallel_for(std::string name, Range& range, std::size_t chunk_size, F&& body) {
+auto parallel_for_eager(std::string name, Range& range, std::size_t chunk_size, F&& body) {
     std::size_t total = range.size();
     if (chunk_size == 0) chunk_size = 1;
     std::size_t num_chunks = (total + chunk_size - 1) / chunk_size;
@@ -2931,6 +3128,17 @@ auto parallel_for(std::string name, Range& range, std::size_t chunk_size, F&& bo
 template <typename F>
 Outcome<TaskIr> lower_parallel_for(ParallelForResult<F>& pf) {
     return std::move(pf.ir);
+}
+
+template <typename Range, typename F>
+    requires std::invocable<F, std::size_t, std::size_t>
+auto parallel_for(std::string name, Range&& range, std::size_t chunk_size, F&& body) {
+    return lazy_parallel_for(std::move(name), std::forward<Range>(range), chunk_size, std::forward<F>(body));
+}
+
+template <typename Range, typename F>
+auto parallel_transform(Range&& range, std::size_t chunk_size, F&& transform) {
+    return lazy_parallel_transform(std::forward<Range>(range), chunk_size, std::forward<F>(transform));
 }
 
 // ============================================================================

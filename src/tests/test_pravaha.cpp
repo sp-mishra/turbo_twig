@@ -2488,7 +2488,92 @@ TEST_CASE("parse_pipeline - rejects reserved identifier then", "[pravaha][parse]
 }
 
 // ============================================================================
-// SECTION 23: parallel_reduce (NAryTree hierarchy)
+// SECTION 23: parallel_for / parallel_transform lazy consistency
+// ============================================================================
+
+TEST_CASE("parallel_for construction does not call body", "[pravaha][algorithms][lazy]") {
+    std::vector<int> data = {1, 2, 3, 4};
+    std::atomic<int> calls{0};
+    auto expr = pravaha::parallel_for("pf", data, 2, [&calls](std::size_t begin, std::size_t end) {
+        calls.fetch_add(static_cast<int>(end - begin));
+    });
+    REQUIRE(calls.load() == 0);
+    REQUIRE(expr.frontend.hash != 0);
+}
+
+TEST_CASE("parallel_transform construction does not call transform", "[pravaha][algorithms][lazy]") {
+    std::vector<int> data = {1, 2, 3, 4};
+    std::atomic<int> calls{0};
+    auto expr = pravaha::parallel_transform(data, 2, [&calls](int x) {
+        calls.fetch_add(1);
+        return x * 2;
+    });
+    REQUIRE(calls.load() == 0);
+    REQUIRE(expr.frontend.hash != 0);
+}
+
+TEST_CASE("Runner submit executes lazy parallel_for and parallel_transform", "[pravaha][algorithms][lazy]") {
+    {
+        std::vector<int> data = {1, 2, 3, 4, 5, 6};
+        std::atomic<int> calls{0};
+        auto expr = pravaha::parallel_for("pf", data, 2, [&calls](std::size_t begin, std::size_t end) {
+            calls.fetch_add(static_cast<int>(end - begin));
+        });
+        pravaha::Runner<> runner;
+        auto run = runner.submit(std::move(expr));
+        REQUIRE(run.has_value());
+        REQUIRE(calls.load() > 0);
+    }
+
+    {
+        std::vector<int> data = {1, 2, 3, 4, 5, 6};
+        std::atomic<int> calls{0};
+        auto expr = pravaha::parallel_transform(data, 2, [&calls](int x) {
+            calls.fetch_add(1);
+            return x + 1;
+        });
+        pravaha::Runner<> runner;
+        auto run = runner.submit(std::move(expr));
+        REQUIRE(run.has_value());
+        REQUIRE(calls.load() == static_cast<int>(data.size()));
+    }
+}
+
+TEST_CASE("lazy parallel_for and parallel_transform compose with sequence", "[pravaha][algorithms][lazy]") {
+    {
+        std::vector<int> data = {1, 2, 3, 4};
+        std::atomic<int> calls{0};
+        bool after = false;
+        auto expr = pravaha::parallel_for("pf", data, 2, [&calls](std::size_t begin, std::size_t end) {
+            calls.fetch_add(static_cast<int>(end - begin));
+        });
+        auto graph = std::move(expr) | pravaha::task("after", [&after]() { after = true; });
+        pravaha::Runner<> runner;
+        auto run = runner.submit(std::move(graph));
+        REQUIRE(run.has_value());
+        REQUIRE(calls.load() > 0);
+        REQUIRE(after);
+    }
+
+    {
+        std::vector<int> data = {1, 2, 3, 4};
+        std::atomic<int> calls{0};
+        bool before = false;
+        auto expr = pravaha::parallel_transform(data, 2, [&calls](int x) {
+            calls.fetch_add(1);
+            return x + 1;
+        });
+        auto graph = pravaha::task("before", [&before]() { before = true; }) | std::move(expr);
+        pravaha::Runner<> runner;
+        auto run = runner.submit(std::move(graph));
+        REQUIRE(run.has_value());
+        REQUIRE(before);
+        REQUIRE(calls.load() == static_cast<int>(data.size()));
+    }
+}
+
+// ============================================================================
+// SECTION 24: parallel_reduce (NAryTree hierarchy)
 // ============================================================================
 
 TEST_CASE("parallel_reduce_eager executes immediately", "[pravaha][reduce]") {
