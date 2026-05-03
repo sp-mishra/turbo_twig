@@ -2491,6 +2491,29 @@ TEST_CASE("parse_pipeline - rejects reserved identifier then", "[pravaha][parse]
 // SECTION 23: parallel_reduce (NAryTree hierarchy)
 // ============================================================================
 
+TEST_CASE("parallel_reduce is currently eager", "[pravaha][reduce]") {
+    std::vector<int> data = {1, 2, 3, 4};
+    std::atomic<int> calls{0};
+    pravaha::Runner<> runner;
+
+    auto result = pravaha::parallel_reduce(
+        runner,
+        data,
+        0,
+        [&data, &calls](int /*init*/, std::size_t begin, std::size_t end) -> int {
+            calls.fetch_add(1);
+            int sum = 0;
+            for (std::size_t i = begin; i < end; ++i) sum += data[i];
+            return sum;
+        },
+        [](int left, int right) -> int { return left + right; },
+        2
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(calls.load() > 0);
+}
+
 TEST_CASE("parallel_reduce - sum of vector<int>", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     pravaha::Runner<> runner;
