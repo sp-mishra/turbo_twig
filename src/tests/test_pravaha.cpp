@@ -2496,7 +2496,7 @@ TEST_CASE("parallel_reduce is currently eager", "[pravaha][reduce]") {
     std::atomic<int> calls{0};
     pravaha::Runner<> runner;
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         0,
@@ -2558,7 +2558,7 @@ TEST_CASE("parallel_reduce - sum of vector<int>", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     pravaha::Runner<> runner;
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         0,  // init
@@ -2579,7 +2579,7 @@ TEST_CASE("parallel_reduce - empty range returns init", "[pravaha][reduce]") {
     std::vector<int> data;
     pravaha::Runner<> runner;
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         42,  // init
@@ -2597,7 +2597,7 @@ TEST_CASE("parallel_reduce - chunking works correctly", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     pravaha::Runner<> runner;
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         0,
@@ -2619,7 +2619,7 @@ TEST_CASE("parallel_reduce - failure returns error", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4, 5};
     pravaha::Runner<> runner;
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         0,
@@ -2638,7 +2638,7 @@ TEST_CASE("parallel_reduce - NAryTree hierarchy created for chunks", "[pravaha][
     std::vector<int> data = {1, 2, 3, 4, 5, 6};
     pravaha::Runner<> runner;
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         0,
@@ -2684,7 +2684,7 @@ TEST_CASE("parallel_reduce - single chunk works", "[pravaha][reduce]") {
     std::vector<int> data = {10, 20, 30};
     pravaha::Runner<> runner;
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         0,
@@ -2707,7 +2707,7 @@ TEST_CASE("parallel_reduce - works with JThreadBackend", "[pravaha][reduce][jthr
     pravaha::JThreadBackend backend(2);
     pravaha::Runner<pravaha::JThreadBackend> runner(backend);
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         0,
@@ -2728,7 +2728,7 @@ TEST_CASE("parallel_reduce - product reduction", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4, 5};
     pravaha::Runner<> runner;
 
-    auto result = pravaha::parallel_reduce(
+    auto result = pravaha::parallel_reduce_eager(
         runner,
         data,
         1,  // init for product

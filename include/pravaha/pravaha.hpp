@@ -2840,7 +2840,7 @@ template <typename Backend, typename GraphAlgorithmPolicy, typename ReadyPolicy,
     requires std::invocable<ReduceFn, T, std::size_t, std::size_t>
           && std::invocable<CombineFn, T, T>
           && std::copy_constructible<T>
-auto parallel_reduce(
+auto parallel_reduce_eager(
     Runner<Backend, GraphAlgorithmPolicy, ReadyPolicy, NoProgressPolicy>& runner,
     Range& range,
     T init,
@@ -2970,6 +2970,30 @@ auto parallel_reduce(
         false,
         PravahaError{ErrorKind::InternalError, ""}
     };
+}
+
+template <typename Backend, typename GraphAlgorithmPolicy, typename ReadyPolicy, typename NoProgressPolicy,
+          typename Range, typename T, typename ReduceFn, typename CombineFn>
+    requires std::invocable<ReduceFn, T, std::size_t, std::size_t>
+          && std::invocable<CombineFn, T, T>
+          && std::copy_constructible<T>
+auto parallel_reduce(
+    Runner<Backend, GraphAlgorithmPolicy, ReadyPolicy, NoProgressPolicy>& runner,
+    Range& range,
+    T init,
+    ReduceFn&& reduce_fn,
+    CombineFn&& combine_fn,
+    std::size_t chunk_size)
+-> Outcome<ParallelReduceResult<T>>
+{
+    return parallel_reduce_eager(
+        runner,
+        range,
+        std::move(init),
+        std::forward<ReduceFn>(reduce_fn),
+        std::forward<CombineFn>(combine_fn),
+        chunk_size
+    );
 }
 
 } // namespace pravaha
