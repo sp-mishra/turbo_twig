@@ -794,6 +794,7 @@ struct RuntimeState {
     std::vector<TaskState> node_states;
     std::vector<std::size_t> remaining_deps;
     std::vector<std::vector<std::size_t>> successors;
+    std::vector<std::vector<std::size_t>> predecessors;
     std::vector<JoinRuntimeState> joins;
     std::vector<std::vector<bool>> join_member_recorded;
     std::vector<std::vector<std::size_t>> node_join_groups;
@@ -807,6 +808,7 @@ struct RuntimeState {
         rs.node_states.resize(n, TaskState::Created);
         rs.remaining_deps.resize(n, 0);
         rs.successors.resize(n);
+        rs.predecessors.resize(n);
         rs.node_join_groups.resize(n);
         rs.join_groups = &ir.join_groups;
 
@@ -835,6 +837,7 @@ struct RuntimeState {
             if (from < n && to < n) {
                 rs.remaining_deps[to]++;
                 rs.successors[from].push_back(to);
+                rs.predecessors[to].push_back(from);
             }
         }
 
@@ -1002,8 +1005,7 @@ struct RuntimeState {
             if (remaining_deps[succ] > 0) {
                 remaining_deps[succ]--;
                 if (remaining_deps[succ] == 0 && node_states[succ] == TaskState::Created) {
-                    // Check if any predecessor of succ has failed — if so, skip
-                    if (has_failed_predecessor(succ)) {
+                    if (has_failed_predecessor(succ) || !all_or_nothing_join_success_for_successor(succ)) {
                         node_states[succ] = TaskState::Skipped;
                         record_join_terminal_for_node(succ, TaskState::Skipped);
                         skip_downstream(succ);
@@ -1025,6 +1027,20 @@ struct RuntimeState {
             }
         }
         return false;
+    }
+
+    [[nodiscard]] bool all_or_nothing_join_success_for_successor(std::size_t succ_idx) const {
+        if (succ_idx >= predecessors.size()) return true;
+        for (auto pred_idx : predecessors[succ_idx]) {
+            if (pred_idx >= node_join_groups.size()) continue;
+            for (auto group_id : node_join_groups[pred_idx]) {
+                if (group_id >= joins.size()) continue;
+                const auto& join = joins[group_id];
+                if (join.policy.kind != JoinPolicyKind::AllOrNothing) continue;
+                if (!join.resolved || !join.success) return false;
+            }
+        }
+        return true;
     }
 
     void skip_downstream(std::size_t idx) {
