@@ -9,6 +9,11 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <deque>
+#include <future>
+#include <mutex>
+#include <chrono>
+#include <thread>
 
 // ============================================================================
 // Test types for concept validation
@@ -1233,6 +1238,228 @@ TEST_CASE("Runner - LiteGraph validation is called before execution", "[pravaha]
     REQUIRE(result.has_value());
     REQUIRE(counter == 2);
     REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}
+
+struct ControlledBackend {
+    mutable std::mutex mutex;
+    std::deque<pravaha::TaskCommand> queue;
+    bool stop_requested{false};
+
+    bool submit(pravaha::TaskCommand cmd) {
+        std::lock_guard lock(mutex);
+        if (stop_requested) return false;
+        queue.push_back(std::move(cmd));
+        return true;
+    }
+
+    void drain() noexcept {}
+
+    void request_stop() noexcept {
+        std::lock_guard lock(mutex);
+        stop_requested = true;
+    }
+
+    [[nodiscard]] bool stopped() const noexcept {
+        std::lock_guard lock(mutex);
+        return stop_requested;
+    }
+
+    [[nodiscard]] std::size_t queue_size() const {
+        std::lock_guard lock(mutex);
+        return queue.size();
+    }
+
+    bool run_front() {
+        pravaha::TaskCommand cmd;
+        {
+            std::lock_guard lock(mutex);
+            if (queue.empty()) return false;
+            cmd = std::move(queue.front());
+            queue.pop_front();
+        }
+        return cmd.run().has_value();
+    }
+
+    bool run_back() {
+        pravaha::TaskCommand cmd;
+        {
+            std::lock_guard lock(mutex);
+            if (queue.empty()) return false;
+            cmd = std::move(queue.back());
+            queue.pop_back();
+        }
+        return cmd.run().has_value();
+    }
+};
+
+TEST_CASE("Runner controlled backend - early release semantics", "[pravaha][runner][parallel][early-release][controlled]") {
+    auto wait_for_queue_at_least = [](ControlledBackend& backend, std::size_t min_size) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (backend.queue_size() >= min_size) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return backend.queue_size() >= min_size;
+    };
+
+    auto finish_runner = [](ControlledBackend& backend, auto& fut) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (fut.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready
+               && std::chrono::steady_clock::now() < deadline) {
+            if (!backend.run_front()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        return fut.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+    };
+
+    SECTION("AnySuccess releases downstream before slow branch") {
+        ControlledBackend backend;
+        pravaha::Runner<ControlledBackend> runner(backend);
+        std::vector<std::string> events;
+
+        auto expr = pravaha::any_success(
+            pravaha::task("fast_success", [&] { events.push_back("fast"); })
+            &
+            pravaha::task("slow_success", [&] { events.push_back("slow"); })
+        ) | pravaha::task("downstream", [&] { events.push_back("downstream"); });
+
+        auto fut = std::async(std::launch::async, [&runner, expr = std::move(expr)]() mutable {
+            return runner.submit(std::move(expr));
+        });
+
+        REQUIRE(wait_for_queue_at_least(backend, 2));
+        REQUIRE(backend.run_front());
+        REQUIRE(wait_for_queue_at_least(backend, 2));
+        REQUIRE(backend.run_back());
+        REQUIRE(events.size() >= 2);
+        REQUIRE(events[0] == "fast");
+        REQUIRE(events[1] == "downstream");
+
+        REQUIRE(finish_runner(backend, fut));
+        auto result = fut.get();
+        REQUIRE(result.has_value());
+        REQUIRE(result->succeeded());
+    }
+
+    SECTION("Quorum<1> releases downstream before slow branch") {
+        ControlledBackend backend;
+        pravaha::Runner<ControlledBackend> runner(backend);
+        std::vector<std::string> events;
+
+        auto expr = pravaha::quorum<1>(
+            pravaha::task("fast_success", [&] { events.push_back("fast"); })
+            &
+            pravaha::task("slow_success", [&] { events.push_back("slow"); })
+        ) | pravaha::task("downstream", [&] { events.push_back("downstream"); });
+
+        auto fut = std::async(std::launch::async, [&runner, expr = std::move(expr)]() mutable {
+            return runner.submit(std::move(expr));
+        });
+
+        REQUIRE(wait_for_queue_at_least(backend, 2));
+        REQUIRE(backend.run_front());
+        REQUIRE(wait_for_queue_at_least(backend, 2));
+        REQUIRE(backend.run_back());
+        REQUIRE(events.size() >= 2);
+        REQUIRE(events[0] == "fast");
+        REQUIRE(events[1] == "downstream");
+
+        REQUIRE(finish_runner(backend, fut));
+        auto result = fut.get();
+        REQUIRE(result.has_value());
+        REQUIRE(result->succeeded());
+    }
+
+    SECTION("Quorum<2> waits for second branch") {
+        ControlledBackend backend;
+        pravaha::Runner<ControlledBackend> runner(backend);
+        std::vector<std::string> events;
+
+        auto expr = pravaha::quorum<2>(
+            pravaha::task("a", [&] { events.push_back("a"); })
+            &
+            pravaha::task("b", [&] { events.push_back("b"); })
+        ) | pravaha::task("downstream", [&] { events.push_back("downstream"); });
+
+        auto fut = std::async(std::launch::async, [&runner, expr = std::move(expr)]() mutable {
+            return runner.submit(std::move(expr));
+        });
+
+        REQUIRE(wait_for_queue_at_least(backend, 2));
+        REQUIRE(backend.run_front());
+        REQUIRE(backend.queue_size() == 1);
+        REQUIRE(events.size() == 1);
+        REQUIRE(events[0] == "a");
+
+        REQUIRE(backend.run_front());
+        REQUIRE(wait_for_queue_at_least(backend, 1));
+
+        REQUIRE(finish_runner(backend, fut));
+        auto result = fut.get();
+        REQUIRE(result.has_value());
+        REQUIRE(result->succeeded());
+    }
+
+    SECTION("CollectAll waits for second branch") {
+        ControlledBackend backend;
+        pravaha::Runner<ControlledBackend> runner(backend);
+        std::vector<std::string> events;
+
+        auto expr = pravaha::collect_all(
+            pravaha::task("a", [&] { events.push_back("a"); })
+            &
+            pravaha::task("b", [&] { events.push_back("b"); })
+        ) | pravaha::task("downstream", [&] { events.push_back("downstream"); });
+
+        auto fut = std::async(std::launch::async, [&runner, expr = std::move(expr)]() mutable {
+            return runner.submit(std::move(expr));
+        });
+
+        REQUIRE(wait_for_queue_at_least(backend, 2));
+        REQUIRE(backend.run_front());
+        REQUIRE(backend.queue_size() == 1);
+        REQUIRE(events.size() == 1);
+        REQUIRE(events[0] == "a");
+
+        REQUIRE(backend.run_front());
+        REQUIRE(wait_for_queue_at_least(backend, 1));
+
+        REQUIRE(finish_runner(backend, fut));
+        auto result = fut.get();
+        REQUIRE(result.has_value());
+        REQUIRE(result->succeeded());
+    }
+
+    SECTION("AllOrNothing waits for second branch") {
+        ControlledBackend backend;
+        pravaha::Runner<ControlledBackend> runner(backend);
+        std::vector<std::string> events;
+
+        auto expr = (
+            pravaha::task("a", [&] { events.push_back("a"); })
+            &
+            pravaha::task("b", [&] { events.push_back("b"); })
+        ) | pravaha::task("downstream", [&] { events.push_back("downstream"); });
+
+        auto fut = std::async(std::launch::async, [&runner, expr = std::move(expr)]() mutable {
+            return runner.submit(std::move(expr));
+        });
+
+        REQUIRE(wait_for_queue_at_least(backend, 2));
+        REQUIRE(backend.run_front());
+        REQUIRE(backend.queue_size() == 1);
+        REQUIRE(events.size() == 1);
+        REQUIRE(events[0] == "a");
+
+        REQUIRE(backend.run_front());
+        REQUIRE(wait_for_queue_at_least(backend, 1));
+
+        REQUIRE(finish_runner(backend, fut));
+        auto result = fut.get();
+        REQUIRE(result.has_value());
+        REQUIRE(result->succeeded());
+    }
 }
 
 // ============================================================================
