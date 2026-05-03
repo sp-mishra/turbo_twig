@@ -2598,12 +2598,16 @@ TEST_CASE("Runner submit executes lazy parallel_reduce and stores result", "[pra
         2
     );
     auto handle = expr.result();
+    REQUIRE(handle.value != nullptr);
+    REQUIRE(handle.mutex != nullptr);
+    {
+        std::lock_guard<std::mutex> lock(*handle.mutex);
+        REQUIRE_FALSE(handle.value->has_value());
+    }
     pravaha::Runner<> runner;
     auto run = runner.submit(std::move(expr));
     REQUIRE(run.has_value());
     REQUIRE(calls.load() > 0);
-    REQUIRE(handle.value != nullptr);
-    REQUIRE(handle.mutex != nullptr);
     {
         std::lock_guard<std::mutex> lock(*handle.mutex);
         REQUIRE(handle.value->has_value());
@@ -2624,6 +2628,10 @@ TEST_CASE("lazy parallel_reduce composes with sequence and parallel operators", 
             2
         );
         auto handle = expr.result();
+        {
+            std::lock_guard<std::mutex> lock(*handle.mutex);
+            REQUIRE_FALSE(handle.value->has_value());
+        }
         auto graph = std::move(expr) | pravaha::task("after", [&after_ran]() { after_ran = true; });
         pravaha::Runner<> runner;
         auto run = runner.submit(std::move(graph));

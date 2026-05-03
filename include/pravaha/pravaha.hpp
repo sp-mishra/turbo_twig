@@ -343,9 +343,9 @@ struct ParallelExpr {
           frontend{symbolic::lithe_frontend::make_parallel_meta(left.frontend.hash, right.frontend.hash)} {}
 };
 
-template <typename Range, typename Init, typename MapFn, typename ReduceFn>
+template <typename T>
 struct ReduceResultHandle {
-    std::shared_ptr<std::optional<Init>> value;
+    std::shared_ptr<std::optional<T>> value;
     std::shared_ptr<std::mutex> mutex;
 };
 
@@ -357,9 +357,9 @@ struct ParallelReduceExpr {
     ReduceFn reduce_fn;
     std::size_t chunk_size{};
     symbolic::LitheFrontendMeta frontend;
-    ReduceResultHandle<Range, Init, MapFn, ReduceFn> result_handle;
+    ReduceResultHandle<Init> result_handle;
 
-    [[nodiscard]] const auto& result() const noexcept { return result_handle; }
+    [[nodiscard]] const ReduceResultHandle<Init>& result() const noexcept { return result_handle; }
 };
 
 template <typename F> requires std::move_constructible<std::decay_t<F>>
