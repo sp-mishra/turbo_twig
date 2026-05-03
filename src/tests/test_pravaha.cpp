@@ -805,6 +805,81 @@ TEST_CASE("lower_to_ir - quorum larger than branch count fails validation", "[pr
     REQUIRE(result.error().kind == pravaha::ErrorKind::ValidationError);
 }
 
+TEST_CASE("join runtime state - AllOrNothing success and failure", "[pravaha][runtime][join]") {
+    pravaha::RuntimeState ok;
+    ok.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::AllOrNothing, 0}, 2});
+    ok.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(ok.joins[0].resolved == false);
+    REQUIRE(ok.joins[0].success == false);
+    ok.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(ok.joins[0].resolved == true);
+    REQUIRE(ok.joins[0].success == true);
+
+    pravaha::RuntimeState fail;
+    fail.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::AllOrNothing, 0}, 2});
+    fail.record_join_terminal(0, pravaha::TaskState::Failed);
+    REQUIRE(fail.joins[0].resolved == true);
+    REQUIRE(fail.joins[0].success == false);
+}
+
+TEST_CASE("join runtime state - CollectAll resolves only when all terminal", "[pravaha][runtime][join]") {
+    pravaha::RuntimeState state;
+    state.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::CollectAll, 0}, 2});
+    state.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(state.joins[0].resolved == false);
+    state.record_join_terminal(0, pravaha::TaskState::Failed);
+    REQUIRE(state.joins[0].resolved == true);
+    REQUIRE(state.joins[0].success == false);
+}
+
+TEST_CASE("join runtime state - AnySuccess success and all-fail resolution", "[pravaha][runtime][join]") {
+    pravaha::RuntimeState success_state;
+    success_state.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::AnySuccess, 0}, 3});
+    success_state.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(success_state.joins[0].resolved == true);
+    REQUIRE(success_state.joins[0].success == true);
+
+    pravaha::RuntimeState fail_state;
+    fail_state.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::AnySuccess, 0}, 2});
+    fail_state.record_join_terminal(0, pravaha::TaskState::Failed);
+    REQUIRE(fail_state.joins[0].resolved == false);
+    fail_state.record_join_terminal(0, pravaha::TaskState::Skipped);
+    REQUIRE(fail_state.joins[0].resolved == true);
+    REQUIRE(fail_state.joins[0].success == false);
+}
+
+TEST_CASE("join runtime state - Quorum success and impossible failure", "[pravaha][runtime][join]") {
+    pravaha::RuntimeState success_state;
+    success_state.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::Quorum, 2}, 3});
+    success_state.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(success_state.joins[0].resolved == false);
+    success_state.record_join_terminal(0, pravaha::TaskState::Failed);
+    REQUIRE(success_state.joins[0].resolved == false);
+    success_state.record_join_terminal(0, pravaha::TaskState::Succeeded);
+    REQUIRE(success_state.joins[0].resolved == true);
+    REQUIRE(success_state.joins[0].success == true);
+
+    pravaha::RuntimeState fail_state;
+    fail_state.joins.push_back(pravaha::JoinRuntimeState{pravaha::JoinPolicy{pravaha::JoinPolicyKind::Quorum, 2}, 3});
+    fail_state.record_join_terminal(0, pravaha::TaskState::Failed);
+    REQUIRE(fail_state.joins[0].resolved == false);
+    fail_state.record_join_terminal(0, pravaha::TaskState::Skipped);
+    REQUIRE(fail_state.joins[0].resolved == true);
+    REQUIRE(fail_state.joins[0].success == false);
+}
+
+TEST_CASE("join runtime state - member accounting prevents double count", "[pravaha][runtime][join]") {
+    pravaha::TaskIr ir;
+    ir.add_node("a", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_node("b", pravaha::ExecutionDomain::CPU, pravaha::TaskCommand::make([]() {}));
+    ir.add_join_group({pravaha::TaskId{0}, pravaha::TaskId{1}}, pravaha::JoinPolicy{pravaha::JoinPolicyKind::AllOrNothing, 0});
+
+    auto state = pravaha::RuntimeState::build(ir);
+    state.record_join_terminal_for_member(0, 0, pravaha::TaskState::Succeeded);
+    state.record_join_terminal_for_member(0, 0, pravaha::TaskState::Succeeded);
+    REQUIRE(state.joins[0].succeeded == 1);
+}
+
 // ============================================================================
 // SECTION 15: LiteGraph Validation Layer
 // ============================================================================

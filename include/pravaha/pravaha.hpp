@@ -779,10 +779,24 @@ struct RunResult {
     std::vector<PravahaError> errors;
 };
 
+struct JoinRuntimeState {
+    JoinPolicy policy{};
+    std::size_t expected{};
+    std::size_t succeeded{};
+    std::size_t failed{};
+    std::size_t canceled{};
+    std::size_t skipped{};
+    bool resolved{};
+    bool success{};
+};
+
 struct RuntimeState {
     std::vector<TaskState> node_states;
     std::vector<std::size_t> remaining_deps;
     std::vector<std::vector<std::size_t>> successors;
+    std::vector<JoinRuntimeState> joins;
+    std::vector<std::vector<bool>> join_member_recorded;
+    std::vector<std::vector<std::size_t>> node_join_groups;
     std::vector<PravahaError> errors;
     std::vector<IrJoinGroup> const* join_groups{nullptr};
     bool canceled{false};
@@ -793,7 +807,26 @@ struct RuntimeState {
         rs.node_states.resize(n, TaskState::Created);
         rs.remaining_deps.resize(n, 0);
         rs.successors.resize(n);
+        rs.node_join_groups.resize(n);
         rs.join_groups = &ir.join_groups;
+
+        rs.joins.reserve(ir.join_groups.size());
+        rs.join_member_recorded.resize(ir.join_groups.size());
+        for (std::size_t gid = 0; gid < ir.join_groups.size(); ++gid) {
+            const auto& group = ir.join_groups[gid];
+            JoinRuntimeState join;
+            join.policy = group.policy;
+            join.expected = group.members.size();
+            join.resolved = (join.expected == 0);
+            join.success = (join.expected == 0);
+            rs.joins.push_back(join);
+            rs.join_member_recorded[gid].assign(group.members.size(), false);
+            for (auto member : group.members) {
+                if (member.value < n) {
+                    rs.node_join_groups[member.value].push_back(gid);
+                }
+            }
+        }
 
         for (const auto& edge : ir.edges) {
             if (edge.kind != EdgeKind::Sequence && edge.kind != EdgeKind::Data) continue;
@@ -826,23 +859,139 @@ struct RuntimeState {
         return false;
     }
 
+    static bool is_terminal_state(TaskState state) {
+        return state == TaskState::Succeeded
+            || state == TaskState::Failed
+            || state == TaskState::Canceled
+            || state == TaskState::Skipped;
+    }
+
+    static void resolve_join(JoinRuntimeState& join) {
+        const std::size_t terminal = join.succeeded + join.failed + join.canceled + join.skipped;
+        const std::size_t remaining_possible = (join.expected > terminal) ? (join.expected - terminal) : 0;
+
+        switch (join.policy.kind) {
+        case JoinPolicyKind::AllOrNothing:
+            if (join.failed + join.canceled + join.skipped > 0) {
+                join.resolved = true;
+                join.success = false;
+                return;
+            }
+            if (join.succeeded >= join.expected) {
+                join.resolved = true;
+                join.success = true;
+            }
+            return;
+
+        case JoinPolicyKind::CollectAll:
+            if (terminal >= join.expected) {
+                join.resolved = true;
+                join.success = (join.succeeded == join.expected);
+            }
+            return;
+
+        case JoinPolicyKind::AnySuccess:
+            if (join.succeeded >= 1) {
+                join.resolved = true;
+                join.success = true;
+                return;
+            }
+            if (terminal >= join.expected) {
+                join.resolved = true;
+                join.success = false;
+            }
+            return;
+
+        case JoinPolicyKind::Quorum: {
+            const std::size_t required = join.policy.quorum_required;
+            if (join.succeeded >= required) {
+                join.resolved = true;
+                join.success = true;
+                return;
+            }
+            if (join.succeeded + remaining_possible < required) {
+                join.resolved = true;
+                join.success = false;
+            }
+            return;
+        }
+        }
+    }
+
+    void record_join_terminal(std::size_t group_id, TaskState terminal_state) {
+        if (group_id >= joins.size()) return;
+        if (!is_terminal_state(terminal_state)) return;
+
+        auto& join = joins[group_id];
+        if (join.resolved && join.success && join.policy.kind == JoinPolicyKind::AnySuccess) {
+            return;
+        }
+
+        switch (terminal_state) {
+        case TaskState::Succeeded:
+            ++join.succeeded;
+            break;
+        case TaskState::Failed:
+            ++join.failed;
+            break;
+        case TaskState::Canceled:
+            ++join.canceled;
+            break;
+        case TaskState::Skipped:
+            ++join.skipped;
+            break;
+        default:
+            return;
+        }
+
+        resolve_join(join);
+    }
+
+    void record_join_terminal_for_member(std::size_t group_id, std::size_t node_index, TaskState terminal_state) {
+        if (!join_groups || group_id >= joins.size() || group_id >= join_member_recorded.size()) return;
+        const auto& members = (*join_groups)[group_id].members;
+        auto it = std::find_if(members.begin(), members.end(), [node_index](TaskId id) { return id.value == node_index; });
+        if (it == members.end()) return;
+        const std::size_t member_index = static_cast<std::size_t>(std::distance(members.begin(), it));
+        if (member_index >= join_member_recorded[group_id].size()) return;
+        if (join_member_recorded[group_id][member_index]) return;
+        join_member_recorded[group_id][member_index] = true;
+        record_join_terminal(group_id, terminal_state);
+    }
+
+    void record_join_terminal_for_node(std::size_t node_index, TaskState terminal_state) {
+        if (node_index >= node_join_groups.size()) return;
+        for (auto group_id : node_join_groups[node_index]) {
+            record_join_terminal_for_member(group_id, node_index, terminal_state);
+        }
+    }
+
     void mark_succeeded(std::size_t idx) {
+        if (idx >= node_states.size()) return;
+        if (is_terminal_state(node_states[idx])) return;
         node_states[idx] = TaskState::Succeeded;
+        record_join_terminal_for_node(idx, TaskState::Succeeded);
         decrement_downstream(idx);
     }
 
     void mark_failed_collect_all(std::size_t idx, PravahaError err) {
+        if (idx >= node_states.size()) return;
+        if (is_terminal_state(node_states[idx])) return;
         node_states[idx] = TaskState::Failed;
+        record_join_terminal_for_node(idx, TaskState::Failed);
         errors.push_back(std::move(err));
         // Don't skip siblings — decrement downstream dep counters so group can complete
         decrement_downstream(idx);
     }
 
     void mark_failed(std::size_t idx, PravahaError err) {
+        if (idx >= node_states.size()) return;
+        if (is_terminal_state(node_states[idx])) return;
         if (is_in_collect_all_group(idx)) {
             mark_failed_collect_all(idx, std::move(err));
         } else {
             node_states[idx] = TaskState::Failed;
+            record_join_terminal_for_node(idx, TaskState::Failed);
             errors.push_back(std::move(err));
             skip_downstream(idx);
         }
@@ -856,6 +1005,7 @@ struct RuntimeState {
                     // Check if any predecessor of succ has failed — if so, skip
                     if (has_failed_predecessor(succ)) {
                         node_states[succ] = TaskState::Skipped;
+                        record_join_terminal_for_node(succ, TaskState::Skipped);
                         skip_downstream(succ);
                     } else {
                         node_states[succ] = TaskState::Ready;
@@ -881,6 +1031,7 @@ struct RuntimeState {
         for (auto succ : successors[idx]) {
             if (node_states[succ] == TaskState::Created || node_states[succ] == TaskState::Ready) {
                 node_states[succ] = TaskState::Skipped;
+                record_join_terminal_for_node(succ, TaskState::Skipped);
                 skip_downstream(succ);
             }
         }
