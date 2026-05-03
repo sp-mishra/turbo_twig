@@ -294,6 +294,8 @@ template <typename T> struct is_pravaha_expr_impl : std::false_type {};
 template <typename F> struct is_pravaha_expr_impl<TaskExpr<F>> : std::true_type {};
 template <typename L, typename R> struct is_pravaha_expr_impl<SequenceExpr<L, R>> : std::true_type {};
 template <typename L, typename R> struct is_pravaha_expr_impl<ParallelExpr<L, R>> : std::true_type {};
+template <typename Range, typename Init, typename MapFn, typename ReduceFn>
+struct is_pravaha_expr_impl<ParallelReduceExpr<Range, Init, MapFn, ReduceFn>> : std::true_type {};
 
 template <typename RangeLike>
 [[nodiscard]] auto range_size_hint(const RangeLike& range) {
@@ -2972,26 +2974,19 @@ auto parallel_reduce_eager(
     };
 }
 
-template <typename Backend, typename GraphAlgorithmPolicy, typename ReadyPolicy, typename NoProgressPolicy,
-          typename Range, typename T, typename ReduceFn, typename CombineFn>
-    requires std::invocable<ReduceFn, T, std::size_t, std::size_t>
-          && std::invocable<CombineFn, T, T>
-          && std::copy_constructible<T>
+template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 auto parallel_reduce(
-    Runner<Backend, GraphAlgorithmPolicy, ReadyPolicy, NoProgressPolicy>& runner,
-    Range& range,
-    T init,
+    Range&& range,
+    Init init,
+    MapFn&& map_fn,
     ReduceFn&& reduce_fn,
-    CombineFn&& combine_fn,
-    std::size_t chunk_size)
--> Outcome<ParallelReduceResult<T>>
+    std::size_t chunk_size = 1024)
 {
-    return parallel_reduce_eager(
-        runner,
-        range,
+    return lazy_parallel_reduce(
+        std::forward<Range>(range),
         std::move(init),
+        std::forward<MapFn>(map_fn),
         std::forward<ReduceFn>(reduce_fn),
-        std::forward<CombineFn>(combine_fn),
         chunk_size
     );
 }

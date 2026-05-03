@@ -2554,6 +2554,32 @@ TEST_CASE("lazy_parallel_reduce construction metadata", "[pravaha][reduce][lazy]
     }
 }
 
+TEST_CASE("parallel_reduce now returns lazy expression", "[pravaha][reduce][lazy]") {
+    std::vector<int> data = {1, 2, 3, 4};
+    std::atomic<int> calls{0};
+
+    auto expr = pravaha::parallel_reduce(
+        data,
+        0,
+        [&calls](int x) {
+            calls.fetch_add(1);
+            return x;
+        },
+        [&calls](int a, int b) {
+            calls.fetch_add(1);
+            return a + b;
+        },
+        2
+    );
+
+    REQUIRE(calls.load() == 0);
+    REQUIRE(expr.frontend.hash != 0);
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(expr)>);
+
+    auto seq = std::move(expr) | pravaha::task("after", []() {});
+    STATIC_REQUIRE(pravaha::IsPravahaExpr<decltype(seq)>);
+}
+
 TEST_CASE("parallel_reduce - sum of vector<int>", "[pravaha][reduce]") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
     pravaha::Runner<> runner;
