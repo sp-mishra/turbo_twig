@@ -874,6 +874,18 @@ struct RuntimeState {
         return false;
     }
 
+    [[nodiscard]] bool is_in_quorum_group(std::size_t idx) const {
+        if (!join_groups) return false;
+        TaskId tid{idx};
+        for (const auto& jg : *join_groups) {
+            if (jg.policy.kind != JoinPolicyKind::Quorum) continue;
+            for (const auto& m : jg.members) {
+                if (m == tid) return true;
+            }
+        }
+        return false;
+    }
+
     static bool is_terminal_state(TaskState state) {
         return state == TaskState::Succeeded
             || state == TaskState::Failed
@@ -1008,6 +1020,15 @@ struct RuntimeState {
         decrement_downstream(idx);
     }
 
+    void mark_failed_quorum(std::size_t idx, PravahaError err) {
+        if (idx >= node_states.size()) return;
+        if (is_terminal_state(node_states[idx])) return;
+        node_states[idx] = TaskState::Failed;
+        record_join_terminal_for_node(idx, TaskState::Failed);
+        errors.push_back(std::move(err));
+        decrement_downstream(idx);
+    }
+
     void mark_failed(std::size_t idx, PravahaError err) {
         if (idx >= node_states.size()) return;
         if (is_terminal_state(node_states[idx])) return;
@@ -1015,6 +1036,8 @@ struct RuntimeState {
             mark_failed_collect_all(idx, std::move(err));
         } else if (is_in_any_success_group(idx)) {
             mark_failed_any_success(idx, std::move(err));
+        } else if (is_in_quorum_group(idx)) {
+            mark_failed_quorum(idx, std::move(err));
         } else {
             node_states[idx] = TaskState::Failed;
             record_join_terminal_for_node(idx, TaskState::Failed);
@@ -1062,7 +1085,8 @@ struct RuntimeState {
             const auto kind = joins[group_id].policy.kind;
             if (kind == JoinPolicyKind::AllOrNothing
                 || kind == JoinPolicyKind::CollectAll
-                || kind == JoinPolicyKind::AnySuccess) {
+                || kind == JoinPolicyKind::AnySuccess
+                || kind == JoinPolicyKind::Quorum) {
                 return true;
             }
         }
@@ -1078,7 +1102,8 @@ struct RuntimeState {
                 const auto& join = joins[group_id];
                 if (join.policy.kind != JoinPolicyKind::AllOrNothing
                     && join.policy.kind != JoinPolicyKind::CollectAll
-                    && join.policy.kind != JoinPolicyKind::AnySuccess) continue;
+                    && join.policy.kind != JoinPolicyKind::AnySuccess
+                    && join.policy.kind != JoinPolicyKind::Quorum) continue;
                 if (!join.resolved || !join.success) return false;
             }
         }
@@ -1090,7 +1115,9 @@ struct RuntimeState {
         for (auto group_id : node_join_groups[idx]) {
             if (group_id >= joins.size()) continue;
             const auto& join = joins[group_id];
-            if (join.policy.kind == JoinPolicyKind::AnySuccess && join.resolved && join.success) {
+            if ((join.policy.kind == JoinPolicyKind::AnySuccess
+                    || join.policy.kind == JoinPolicyKind::Quorum)
+                && join.resolved && join.success) {
                 return true;
             }
         }
