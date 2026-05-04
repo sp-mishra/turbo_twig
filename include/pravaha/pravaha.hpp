@@ -2071,6 +2071,18 @@ public:
     Backend& backend_ref() noexcept { return *backend_; }
 
 private:
+    void emit_task_event(const TaskIr& ir, const RuntimeState& rt, std::size_t idx, EventKind kind) {
+        if constexpr (Observer::enabled) {
+            Observer::on_task_event(TaskEvent{
+                kind,
+                ir.nodes[idx].id,
+                ir.nodes[idx].name,
+                rt.node_states[idx],
+                ir.nodes[idx].frontend_hash
+            });
+        }
+    }
+
     Outcome<RunResult> execute(TaskIr& ir) {
         auto sstate = std::make_shared<detail::SharedSchedulerState>();
         sstate->rt = RuntimeState::build(ir);
@@ -2106,7 +2118,9 @@ private:
             std::lock_guard lock(sstate->mutex);
             for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
                 if (ReadyPolicy::is_ready(sstate->rt, i)) {
+                    emit_task_event(ir, sstate->rt, i, EventKind::TaskReady);
                     sstate->rt.node_states[i] = TaskState::Scheduled;
+                    emit_task_event(ir, sstate->rt, i, EventKind::TaskScheduled);
                     ready_indices.push_back(i);
                 }
             }
@@ -2124,6 +2138,14 @@ private:
         auto* node_cmd_ptr = &ir.nodes[idx].command;
         auto* ir_ptr = &ir;
         auto wrapped = TaskCommand::make([this, idx, node_cmd_ptr, ir_ptr, sstate]() mutable {
+            {
+                std::lock_guard lock(sstate->mutex);
+                if (!RuntimeState::is_terminal_state(sstate->rt.node_states[idx])) {
+                    sstate->rt.node_states[idx] = TaskState::Running;
+                    emit_task_event(*ir_ptr, sstate->rt, idx, EventKind::TaskStarted);
+                }
+            }
+
             // Run the actual node command
             auto result = node_cmd_ptr->run();
 
@@ -2134,15 +2156,19 @@ private:
                 std::lock_guard lock(sstate->mutex);
                 if (result.has_value()) {
                     sstate->rt.mark_succeeded(idx);
+                    emit_task_event(*ir_ptr, sstate->rt, idx, EventKind::TaskCompleted);
                 } else {
                     sstate->rt.mark_failed(idx, std::move(result.error()));
+                    emit_task_event(*ir_ptr, sstate->rt, idx, EventKind::TaskFailed);
                 }
                 sstate->count_terminals();
 
                 // Collect newly ready nodes
                 for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
                     if (ReadyPolicy::is_ready(sstate->rt, i)) {
+                        emit_task_event(*ir_ptr, sstate->rt, i, EventKind::TaskReady);
                         sstate->rt.node_states[i] = TaskState::Scheduled;
+                        emit_task_event(*ir_ptr, sstate->rt, i, EventKind::TaskScheduled);
                         newly_ready.push_back(i);
                     }
                 }

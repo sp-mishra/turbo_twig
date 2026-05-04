@@ -1988,8 +1988,17 @@ struct TestObserver {
     static constexpr bool enabled = true;
     static inline int lowered = 0;
     static inline int validated = 0;
+    static inline std::vector<pravaha::EventKind> task_events{};
 
-    static void on_task_event(const pravaha::TaskEvent&) noexcept {}
+    static void reset() {
+        lowered = 0;
+        validated = 0;
+        task_events.clear();
+    }
+
+    static void on_task_event(const pravaha::TaskEvent& e) noexcept {
+        task_events.push_back(e.kind);
+    }
     static void on_join_event(const pravaha::JoinEvent&) noexcept {}
     static void on_graph_event(const pravaha::GraphEvent& e) noexcept {
         if (e.kind == pravaha::EventKind::GraphLowered) ++lowered;
@@ -2074,7 +2083,7 @@ TEST_CASE("Runner policy slot - custom Observer slot compiles", "[pravaha][runne
     CustomObserverRunner runner;
     auto result = runner.submit(pravaha::task("A", []() {}));
     REQUIRE(result.has_value());
-    REQUIRE(CompileOnlyObserver::task_calls == 0);
+    REQUIRE(CompileOnlyObserver::task_calls == 4);
     REQUIRE(CompileOnlyObserver::join_calls == 0);
     REQUIRE(CompileOnlyObserver::graph_calls == 2);
 }
@@ -2087,8 +2096,7 @@ TEST_CASE("Runner emits GraphLowered and GraphValidated events", "[pravaha][runn
         pravaha::DefaultNoProgressPolicy,
         TestObserver>;
 
-    TestObserver::lowered = 0;
-    TestObserver::validated = 0;
+    TestObserver::reset();
 
     ObservedRunner runner;
     auto result = runner.submit(pravaha::task("a", []() {}));
@@ -2097,3 +2105,49 @@ TEST_CASE("Runner emits GraphLowered and GraphValidated events", "[pravaha][runn
     REQUIRE(TestObserver::lowered == 1);
     REQUIRE(TestObserver::validated == 1);
 }
+
+TEST_CASE("Runner emits task lifecycle events for successful task", "[pravaha][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+
+    ObservedRunner runner;
+    auto result = runner.submit(pravaha::task("a", []() {}));
+
+    REQUIRE(result.has_value());
+    REQUIRE(TestObserver::task_events == std::vector<pravaha::EventKind>{
+        pravaha::EventKind::TaskReady,
+        pravaha::EventKind::TaskScheduled,
+        pravaha::EventKind::TaskStarted,
+        pravaha::EventKind::TaskCompleted
+    });
+}
+
+TEST_CASE("Runner emits TaskStarted and TaskFailed for failing task", "[pravaha][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+
+    ObservedRunner runner;
+    auto result = runner.submit(pravaha::task("bad", []() -> pravaha::Outcome<pravaha::Unit> {
+        return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "bad"});
+    }));
+
+    REQUIRE(result.has_value());
+    const auto started_it = std::find(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskStarted);
+    const auto failed_it = std::find(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskFailed);
+    REQUIRE(started_it != TestObserver::task_events.end());
+    REQUIRE(failed_it != TestObserver::task_events.end());
+    REQUIRE(started_it < failed_it);
+}
+
