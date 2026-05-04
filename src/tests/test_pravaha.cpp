@@ -2151,3 +2151,34 @@ TEST_CASE("Runner emits TaskStarted and TaskFailed for failing task", "[pravaha]
     REQUIRE(started_it < failed_it);
 }
 
+TEST_CASE("Runner emits TaskSkipped for downstream task after failure", "[pravaha][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+
+    int after_ran = 0;
+    ObservedRunner runner;
+    auto result = runner.submit(
+        pravaha::task("bad", []() -> pravaha::Outcome<pravaha::Unit> {
+            return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "bad"});
+        })
+        |
+        pravaha::task("after", [&after_ran]() { ++after_ran; })
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(after_ran == 0);
+    REQUIRE(std::count(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskFailed) == 1);
+    REQUIRE(std::count(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskSkipped) == 1);
+    const auto failed_it = std::find(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskFailed);
+    const auto skipped_it = std::find(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskSkipped);
+    REQUIRE(failed_it != TestObserver::task_events.end());
+    REQUIRE(skipped_it != TestObserver::task_events.end());
+    REQUIRE(failed_it < skipped_it);
+}
+

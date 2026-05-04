@@ -2083,6 +2083,21 @@ private:
         }
     }
 
+    void emit_skip_cancel_transitions(const TaskIr& ir, const std::vector<TaskState>& before, const RuntimeState& rt) {
+        if constexpr (Observer::enabled) {
+            for (std::size_t i = 0; i < rt.node_states.size(); ++i) {
+                if (i >= before.size() || before[i] == rt.node_states[i]) {
+                    continue;
+                }
+                if (rt.node_states[i] == TaskState::Skipped) {
+                    emit_task_event(ir, rt, i, EventKind::TaskSkipped);
+                } else if (rt.node_states[i] == TaskState::Canceled) {
+                    emit_task_event(ir, rt, i, EventKind::TaskCanceled);
+                }
+            }
+        }
+    }
+
     Outcome<RunResult> execute(TaskIr& ir) {
         auto sstate = std::make_shared<detail::SharedSchedulerState>();
         sstate->rt = RuntimeState::build(ir);
@@ -2154,6 +2169,10 @@ private:
             bool no_progress_forced = false;
             {
                 std::lock_guard lock(sstate->mutex);
+                std::vector<TaskState> before_states;
+                if constexpr (Observer::enabled) {
+                    before_states = sstate->rt.node_states;
+                }
                 if (result.has_value()) {
                     sstate->rt.mark_succeeded(idx);
                     emit_task_event(*ir_ptr, sstate->rt, idx, EventKind::TaskCompleted);
@@ -2161,6 +2180,7 @@ private:
                     sstate->rt.mark_failed(idx, std::move(result.error()));
                     emit_task_event(*ir_ptr, sstate->rt, idx, EventKind::TaskFailed);
                 }
+                emit_skip_cancel_transitions(*ir_ptr, before_states, sstate->rt);
                 sstate->count_terminals();
 
                 // Collect newly ready nodes
@@ -2195,11 +2215,16 @@ private:
         if (!submit_result.has_value()) {
             {
                 std::lock_guard lock(sstate->mutex);
+                std::vector<TaskState> before_states;
+                if constexpr (Observer::enabled) {
+                    before_states = sstate->rt.node_states;
+                }
                 sstate->rt.mark_failed(idx, PravahaError{
                     ErrorKind::QueueRejected,
                     submit_result.error().message,
                     ir.nodes[idx].name
                 });
+                emit_skip_cancel_transitions(ir, before_states, sstate->rt);
                 sstate->count_terminals();
                 (void)NoProgressPolicy::handle_no_progress(*sstate);
             }
