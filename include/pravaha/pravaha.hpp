@@ -2038,8 +2038,26 @@ public:
         if (!ir_result.has_value()) return std::unexpected(ir_result.error());
         auto& ir = ir_result.value();
 
+        if constexpr (Observer::enabled) {
+            Observer::on_graph_event(GraphEvent{
+                EventKind::GraphLowered,
+                ir.nodes.size(),
+                ir.edges.size(),
+                ir.join_groups.size()
+            });
+        }
+
         auto validation = GraphAlgorithmPolicy::validate(ir);
         if (!validation.has_value()) return std::unexpected(validation.error());
+
+        if constexpr (Observer::enabled) {
+            Observer::on_graph_event(GraphEvent{
+                EventKind::GraphValidated,
+                ir.nodes.size(),
+                ir.edges.size(),
+                ir.join_groups.size()
+            });
+        }
 
         auto domain_check = validate_domain_constraints(ir);
         if (!domain_check.has_value()) return std::unexpected(domain_check.error());
@@ -3364,11 +3382,12 @@ auto parallel_reduce_eager_impl(
         {
             std::lock_guard<std::mutex> lock(sstate->mutex);
             for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
-                if (sstate->rt.node_states[i] == TaskState::Ready) {
+                if (ReadyPolicy::is_ready(sstate->rt, i)) {
                     sstate->rt.node_states[i] = TaskState::Scheduled;
                     ready_indices.push_back(i);
                 }
             }
+            sstate->note_scheduled_in_last_pass(ready_indices.size());
             sstate->count_terminals();
         }
 
