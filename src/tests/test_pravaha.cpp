@@ -2067,6 +2067,16 @@ struct TraceObserver {
     }
 };
 
+struct BadObserver {
+    static constexpr bool enabled = true;
+    static void on_task_event(const pravaha::TaskEvent&) noexcept {}
+    static void on_join_event(const pravaha::JoinEvent&) noexcept {}
+};
+
+static_assert(pravaha::ObserverPolicy<pravaha::NoObserver>);
+static_assert(pravaha::ObserverPolicy<TestObserver>);
+static_assert(!pravaha::ObserverPolicy<BadObserver>);
+
 TEST_CASE("Runner policy slot - custom GraphAlgorithmPolicy is used", "[pravaha][runner][policy]") {
     CountingGraphPolicy::validate_calls = 0;
     pravaha::Runner<pravaha::InlineBackend, CountingGraphPolicy> runner;

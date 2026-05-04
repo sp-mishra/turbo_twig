@@ -566,6 +566,7 @@ struct NoObserver {
 template<class T>
 concept ObserverPolicy =
     requires(const TaskEvent& te, const JoinEvent& je, const GraphEvent& ge) {
+        { T::enabled } -> std::convertible_to<const bool&>;
         { T::on_task_event(te) } noexcept;
         { T::on_join_event(je) } noexcept;
         { T::on_graph_event(ge) } noexcept;
@@ -2026,7 +2027,7 @@ template <
     typename GraphAlgorithmPolicy = DefaultGraphAlgorithmPolicy,
     typename ReadyPolicy = DefaultReadyPolicy,
     typename NoProgressPolicy = DefaultNoProgressPolicy,
-    typename Observer = NoObserver>
+    ObserverPolicy Observer = NoObserver>
 class Runner {
     Backend* backend_{nullptr};
     Backend owned_backend_;
