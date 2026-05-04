@@ -157,6 +157,73 @@ TEST_CASE("TaskState all values accessible", "[pravaha][state]") {
             REQUIRE(states[i] != states[j]);
 }
 
+TEST_CASE("EventKind values are distinct", "[pravaha][observer]") {
+    STATIC_REQUIRE(pravaha::EventKind::TaskReady != pravaha::EventKind::TaskScheduled);
+    STATIC_REQUIRE(pravaha::EventKind::TaskStarted != pravaha::EventKind::TaskCompleted);
+    STATIC_REQUIRE(pravaha::EventKind::TaskFailed != pravaha::EventKind::TaskSkipped);
+    STATIC_REQUIRE(pravaha::EventKind::TaskCanceled != pravaha::EventKind::JoinResolved);
+    STATIC_REQUIRE(pravaha::EventKind::GraphLowered != pravaha::EventKind::GraphValidated);
+}
+
+TEST_CASE("Observer event payloads are constructible", "[pravaha][observer]") {
+    const pravaha::TaskEvent task_event{
+        pravaha::EventKind::TaskReady,
+        pravaha::TaskId{7},
+        "task_a",
+        pravaha::TaskState::Ready,
+        123
+    };
+    REQUIRE(task_event.kind == pravaha::EventKind::TaskReady);
+    REQUIRE(task_event.task_id == pravaha::TaskId{7});
+    REQUIRE(task_event.task_name == "task_a");
+    REQUIRE(task_event.state == pravaha::TaskState::Ready);
+    REQUIRE(task_event.frontend_hash == 123);
+
+    const pravaha::JoinEvent join_event{
+        pravaha::EventKind::JoinResolved,
+        2,
+        pravaha::JoinPolicy{pravaha::JoinPolicyKind::CollectAll, 0},
+        true,
+        4,
+        3,
+        1,
+        0,
+        0
+    };
+    REQUIRE(join_event.kind == pravaha::EventKind::JoinResolved);
+    REQUIRE(join_event.group_id == 2);
+    REQUIRE(join_event.policy.kind == pravaha::JoinPolicyKind::CollectAll);
+    REQUIRE(join_event.success);
+    REQUIRE(join_event.expected == 4);
+    REQUIRE(join_event.succeeded == 3);
+    REQUIRE(join_event.failed == 1);
+
+    const pravaha::GraphEvent graph_event{
+        pravaha::EventKind::GraphLowered,
+        10,
+        12,
+        3
+    };
+    REQUIRE(graph_event.kind == pravaha::EventKind::GraphLowered);
+    REQUIRE(graph_event.node_count == 10);
+    REQUIRE(graph_event.edge_count == 12);
+    REQUIRE(graph_event.join_group_count == 3);
+}
+
+TEST_CASE("NoObserver satisfies observer policy and no-op methods compile", "[pravaha][observer]") {
+    STATIC_REQUIRE(pravaha::ObserverPolicy<pravaha::NoObserver>);
+
+    const pravaha::TaskEvent task_event{};
+    const pravaha::JoinEvent join_event{};
+    const pravaha::GraphEvent graph_event{};
+
+    REQUIRE_FALSE(pravaha::NoObserver::enabled);
+    pravaha::NoObserver::on_task_event(task_event);
+    pravaha::NoObserver::on_join_event(join_event);
+    pravaha::NoObserver::on_graph_event(graph_event);
+    SUCCEED();
+}
+
 // ============================================================================
 // SECTION 5: JoinPolicyKind and ExecutionDomain Enums
 // ============================================================================

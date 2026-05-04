@@ -511,6 +511,61 @@ struct TaskId {
 
 inline constexpr TaskId invalid_task_id{};
 
+enum class EventKind {
+    TaskReady,
+    TaskScheduled,
+    TaskStarted,
+    TaskCompleted,
+    TaskFailed,
+    TaskSkipped,
+    TaskCanceled,
+    JoinResolved,
+    GraphLowered,
+    GraphValidated
+};
+
+struct TaskEvent {
+    EventKind kind{};
+    TaskId task_id{};
+    std::string_view task_name{};
+    TaskState state{};
+    std::size_t frontend_hash{};
+};
+
+struct JoinEvent {
+    EventKind kind{EventKind::JoinResolved};
+    std::size_t group_id{};
+    JoinPolicy policy{};
+    bool success{};
+    std::size_t expected{};
+    std::size_t succeeded{};
+    std::size_t failed{};
+    std::size_t canceled{};
+    std::size_t skipped{};
+};
+
+struct GraphEvent {
+    EventKind kind{};
+    std::size_t node_count{};
+    std::size_t edge_count{};
+    std::size_t join_group_count{};
+};
+
+struct NoObserver {
+    static constexpr bool enabled = false;
+    static void on_task_event(const TaskEvent&) noexcept {}
+    static void on_join_event(const JoinEvent&) noexcept {}
+    static void on_graph_event(const GraphEvent&) noexcept {}
+};
+
+template<class T>
+concept ObserverPolicy =
+    requires(const TaskEvent& te, const JoinEvent& je, const GraphEvent& ge) {
+        { T::on_task_event(te) } noexcept;
+        { T::on_join_event(je) } noexcept;
+        { T::on_graph_event(ge) } noexcept;
+    };
+
 enum class EdgeKind { Sequence, Data, Cancellation, Join };
 
 struct GraphNodePayload {
