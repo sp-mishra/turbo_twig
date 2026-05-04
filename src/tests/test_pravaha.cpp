@@ -2014,6 +2014,59 @@ struct TestObserver {
     }
 };
 
+struct TraceObserver {
+    static constexpr bool enabled = true;
+    static inline std::vector<std::string> trace{};
+
+    static void reset() {
+        trace.clear();
+    }
+
+    static void on_task_event(const pravaha::TaskEvent& e) noexcept {
+        std::string kind;
+        switch (e.kind) {
+        case pravaha::EventKind::TaskReady:
+            kind = "ready";
+            break;
+        case pravaha::EventKind::TaskScheduled:
+            kind = "scheduled";
+            break;
+        case pravaha::EventKind::TaskStarted:
+            kind = "started";
+            break;
+        case pravaha::EventKind::TaskCompleted:
+            kind = "completed";
+            break;
+        case pravaha::EventKind::TaskFailed:
+            kind = "failed";
+            break;
+        case pravaha::EventKind::TaskSkipped:
+            kind = "skipped";
+            break;
+        case pravaha::EventKind::TaskCanceled:
+            kind = "canceled";
+            break;
+        default:
+            return;
+        }
+        trace.push_back("task:" + kind + ":" + std::string(e.task_name));
+    }
+
+    static void on_join_event(const pravaha::JoinEvent& e) noexcept {
+        if (e.kind == pravaha::EventKind::JoinResolved) {
+            trace.push_back(std::string{"join:resolved:"} + (e.success ? "success" : "failure"));
+        }
+    }
+
+    static void on_graph_event(const pravaha::GraphEvent& e) noexcept {
+        if (e.kind == pravaha::EventKind::GraphLowered) {
+            trace.push_back("graph:lowered");
+        } else if (e.kind == pravaha::EventKind::GraphValidated) {
+            trace.push_back("graph:validated");
+        }
+    }
+};
+
 TEST_CASE("Runner policy slot - custom GraphAlgorithmPolicy is used", "[pravaha][runner][policy]") {
     CountingGraphPolicy::validate_calls = 0;
     pravaha::Runner<pravaha::InlineBackend, CountingGraphPolicy> runner;
@@ -2326,5 +2379,30 @@ TEST_CASE("Runner emits non-zero timestamps for task/join/graph events", "[prava
         [](const pravaha::JoinEvent& e) { return e.timestamp_ns > 0; }));
     REQUIRE(std::all_of(TestObserver::graph_events.begin(), TestObserver::graph_events.end(),
         [](const pravaha::GraphEvent& e) { return e.timestamp_ns > 0; }));
+}
+
+TEST_CASE("TraceObserver captures compact external trace", "[pravaha][runner][observer]") {
+    using TraceRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TraceObserver>;
+
+    TraceObserver::reset();
+
+    TraceRunner runner;
+    auto result = runner.submit(
+        (pravaha::task("a", []() {}) & pravaha::task("b", []() {}))
+        | pravaha::task("c", []() {})
+    );
+
+    REQUIRE(result.has_value());
+    REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "graph:lowered") != TraceObserver::trace.end());
+    REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "graph:validated") != TraceObserver::trace.end());
+    REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "task:scheduled:a") != TraceObserver::trace.end());
+    REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "task:scheduled:b") != TraceObserver::trace.end());
+    REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "task:scheduled:c") != TraceObserver::trace.end());
+    REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "join:resolved:success") != TraceObserver::trace.end());
 }
 
