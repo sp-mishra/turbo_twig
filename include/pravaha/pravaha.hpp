@@ -2020,12 +2020,15 @@ template <
     typename Backend = InlineBackend,
     typename GraphAlgorithmPolicy = DefaultGraphAlgorithmPolicy,
     typename ReadyPolicy = DefaultReadyPolicy,
-    typename NoProgressPolicy = DefaultNoProgressPolicy>
+    typename NoProgressPolicy = DefaultNoProgressPolicy,
+    typename Observer = NoObserver>
 class Runner {
     Backend* backend_{nullptr};
     Backend owned_backend_;
 
 public:
+    using observer_type = Observer;
+
     Runner() : owned_backend_{}, backend_{&owned_backend_} {}
     explicit Runner(Backend& b) : backend_{&b} {}
 
@@ -2635,6 +2638,7 @@ inline Outcome<ParallelIntroParse> parse_parallel_intro(std::string_view text, s
     out.lithe_hash = meta.hash;
     return out;
 }
+
 
 } // namespace lithe_frontend
 
@@ -3283,11 +3287,6 @@ auto parallel_transform(Range&& range, std::size_t chunk_size, F&& transform) {
     return lazy_parallel_transform(std::forward<Range>(range), chunk_size, std::forward<F>(transform));
 }
 
-// ============================================================================
-//  SECTION 13: PARALLEL_REDUCE (NAryTree hierarchy)
-// ============================================================================
-
-// Result type for parallel_reduce capturing the NAryTree hierarchy
 template <typename T>
 struct ParallelReduceResult {
     T value;
@@ -3297,33 +3296,15 @@ struct ParallelReduceResult {
     PravahaError error{ErrorKind::InternalError, ""};
 };
 
-// parallel_reduce: splits range into chunks, reduces each chunk in parallel,
-// then combines partial results. Uses NAryTree to represent the fork-join
-// reduction hierarchy.
-//
-// API:
-//   auto result = pravaha::parallel_reduce(runner, range, init, reduce_fn, combine_fn, chunk_size);
-//
-// - runner:     Runner<Backend>& — executes chunk tasks
-// - range:      random-access container with .size() and operator[]
-// - init:       initial value of type T
-// - reduce_fn:  (T accum, std::size_t begin, std::size_t end) -> T
-//               reduces a sub-range [begin, end) into a partial result
-// - combine_fn: (T left, T right) -> T
-//               combines two partial results
-// - chunk_size: number of elements per chunk
-//
-// Returns: Outcome<ParallelReduceResult<T>>
-
 namespace detail {
 
 template <typename Backend, typename GraphAlgorithmPolicy, typename ReadyPolicy, typename NoProgressPolicy,
-          typename Range, typename T, typename ReduceFn, typename CombineFn>
+          typename Observer, typename Range, typename T, typename ReduceFn, typename CombineFn>
     requires std::invocable<ReduceFn, T, std::size_t, std::size_t>
           && std::invocable<CombineFn, T, T>
           && std::copy_constructible<T>
 auto parallel_reduce_eager_impl(
-    Runner<Backend, GraphAlgorithmPolicy, ReadyPolicy, NoProgressPolicy>& runner,
+    Runner<Backend, GraphAlgorithmPolicy, ReadyPolicy, NoProgressPolicy, Observer>& runner,
     Range& range,
     T init,
     ReduceFn&& reduce_fn,
@@ -3333,7 +3314,6 @@ auto parallel_reduce_eager_impl(
 {
     std::size_t total = range.size();
 
-    // Empty range returns init immediately
     if (total == 0) {
         AlgorithmTree tree(AlgorithmTreeNode{"reduce_root", 0, 0});
         return ParallelReduceResult<T>{init, std::move(tree), 0, false, PravahaError{ErrorKind::InternalError, ""}};
@@ -3342,30 +3322,21 @@ auto parallel_reduce_eager_impl(
     if (chunk_size == 0) chunk_size = 1;
     std::size_t num_chunks = (total + chunk_size - 1) / chunk_size;
 
-    // Build NAryTree hierarchy: root "reduce" node with chunk children
     AlgorithmTree tree(AlgorithmTreeNode{"reduce_root", 0, total});
     auto* root_node = tree.get_root();
-
-    // Add combine node as child of root (represents the combine step)
     auto* combine_node = tree.insert(root_node, AlgorithmTreeNode{"combine", 0, total});
 
-    // Storage for partial results (one per chunk)
     auto partials = std::make_shared<std::vector<T>>(num_chunks, init);
     auto error_flag = std::make_shared<std::atomic<bool>>(false);
     auto first_error = std::make_shared<PravahaError>(ErrorKind::InternalError, "");
     auto error_mutex = std::make_shared<std::mutex>();
 
-    // Build chunk tasks as a parallel expression
-    // We build a TaskIr manually with all chunks as independent tasks
     TaskIr ir;
     for (std::size_t i = 0; i < num_chunks; ++i) {
         std::size_t b = i * chunk_size;
         std::size_t e = std::min(b + chunk_size, total);
-
-        // Add chunk node to tree hierarchy under combine node
         tree.insert(combine_node, AlgorithmTreeNode{"chunk_" + std::to_string(i), b, e});
 
-        // Capture what we need for the chunk task
         auto chunk_cmd = TaskCommand::make(
             [i, b, e, init_val = init, &reduce_fn, partials, error_flag, first_error, error_mutex]() mutable {
                 try {
@@ -3377,22 +3348,17 @@ auto parallel_reduce_eager_impl(
                     *first_error = PravahaError{ErrorKind::TaskFailed,
                         std::string{"parallel_reduce chunk failed: "} + ex.what(),
                         "chunk_" + std::to_string(i)};
-                    throw; // re-throw so TaskCommand records it as failure
+                    throw;
                 }
             });
         ir.add_node("chunk_" + std::to_string(i), ExecutionDomain::CPU, std::move(chunk_cmd));
     }
 
-    // All chunk nodes are independent (no edges) — they run in parallel
-    // No validation needed: independent chunks with no edges cannot have cycles.
-
-    // Execute using runner's backend via shared scheduler state
     auto sstate = std::make_shared<detail::SharedSchedulerState>();
     sstate->rt = RuntimeState::build(ir);
     sstate->total_nodes = ir.nodes.size();
     sstate->count_terminals();
 
-    // Schedule all ready nodes (all chunks are ready since no deps)
     {
         std::vector<std::size_t> ready_indices;
         {
@@ -3426,20 +3392,17 @@ auto parallel_reduce_eager_impl(
         }
     }
 
-    // Wait for all chunk tasks to complete
     {
         std::unique_lock<std::mutex> lock(sstate->mutex);
         sstate->cv_done.wait(lock, [&]() { return sstate->all_terminal(); });
     }
 
-    // Check for errors (AllOrNothing semantics)
     auto run_result = sstate->rt.finalize();
     if (run_result.final_state == TaskState::Failed) {
         std::lock_guard<std::mutex> lk(*error_mutex);
         return std::unexpected(*first_error);
     }
 
-    // Combine phase: sequentially combine all partial results
     T combined = (*partials)[0];
     for (std::size_t i = 1; i < num_chunks; ++i) {
         combined = combine_fn(std::move(combined), std::move((*partials)[i]));
@@ -3457,12 +3420,12 @@ auto parallel_reduce_eager_impl(
 } // namespace detail
 
 template <typename Backend, typename GraphAlgorithmPolicy, typename ReadyPolicy, typename NoProgressPolicy,
-          typename Range, typename T, typename ReduceFn, typename CombineFn>
+          typename Observer, typename Range, typename T, typename ReduceFn, typename CombineFn>
     requires std::invocable<ReduceFn, T, std::size_t, std::size_t>
           && std::invocable<CombineFn, T, T>
           && std::copy_constructible<T>
 auto parallel_reduce_eager(
-    Runner<Backend, GraphAlgorithmPolicy, ReadyPolicy, NoProgressPolicy>& runner,
+    Runner<Backend, GraphAlgorithmPolicy, ReadyPolicy, NoProgressPolicy, Observer>& runner,
     Range& range,
     T init,
     ReduceFn&& reduce_fn,
@@ -3479,6 +3442,7 @@ auto parallel_reduce_eager(
         chunk_size
     );
 }
+
 
 template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 auto parallel_reduce(

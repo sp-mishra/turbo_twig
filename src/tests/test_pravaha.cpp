@@ -2230,6 +2230,17 @@ struct CountingReadyPolicy {
     }
 };
 
+struct CompileOnlyObserver {
+    static constexpr bool enabled = true;
+    static inline int task_calls = 0;
+    static inline int join_calls = 0;
+    static inline int graph_calls = 0;
+
+    static void on_task_event(const pravaha::TaskEvent&) noexcept { ++task_calls; }
+    static void on_join_event(const pravaha::JoinEvent&) noexcept { ++join_calls; }
+    static void on_graph_event(const pravaha::GraphEvent&) noexcept { ++graph_calls; }
+};
+
 TEST_CASE("Runner policy slot - custom GraphAlgorithmPolicy is used", "[pravaha][runner][policy]") {
     CountingGraphPolicy::validate_calls = 0;
     pravaha::Runner<pravaha::InlineBackend, CountingGraphPolicy> runner;
@@ -2267,6 +2278,7 @@ TEST_CASE("Runner policy slot - custom ReadyPolicy is used", "[pravaha][runner][
 }
 
 TEST_CASE("Runner policy slot - default Runner compiles and runs", "[pravaha][runner][policy]") {
+    STATIC_REQUIRE(std::is_same_v<typename pravaha::Runner<>::observer_type, pravaha::NoObserver>);
     pravaha::Runner<> runner;
     auto a = pravaha::task("A", []() {});
     auto b = pravaha::task("B", []() {});
@@ -2274,6 +2286,41 @@ TEST_CASE("Runner policy slot - default Runner compiles and runs", "[pravaha][ru
     auto result = runner.submit(std::move(expr));
     REQUIRE(result.has_value());
     REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner policy slot - explicit NoObserver slot compiles", "[pravaha][runner][policy]") {
+    using ExplicitNoObserverRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        pravaha::NoObserver>;
+
+    STATIC_REQUIRE(std::is_same_v<typename ExplicitNoObserverRunner::observer_type, pravaha::NoObserver>);
+    ExplicitNoObserverRunner runner;
+    auto result = runner.submit(pravaha::task("A", []() {}));
+    REQUIRE(result.has_value());
+}
+
+TEST_CASE("Runner policy slot - custom Observer slot compiles", "[pravaha][runner][policy]") {
+    using CustomObserverRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        CompileOnlyObserver>;
+
+    CompileOnlyObserver::task_calls = 0;
+    CompileOnlyObserver::join_calls = 0;
+    CompileOnlyObserver::graph_calls = 0;
+
+    STATIC_REQUIRE(std::is_same_v<typename CustomObserverRunner::observer_type, CompileOnlyObserver>);
+    CustomObserverRunner runner;
+    auto result = runner.submit(pravaha::task("A", []() {}));
+    REQUIRE(result.has_value());
+    REQUIRE(CompileOnlyObserver::task_calls == 0);
+    REQUIRE(CompileOnlyObserver::join_calls == 0);
+    REQUIRE(CompileOnlyObserver::graph_calls == 0);
 }
 
 // ============================================================================
