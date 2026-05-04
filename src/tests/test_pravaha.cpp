@@ -1989,17 +1989,19 @@ struct TestObserver {
     static inline int lowered = 0;
     static inline int validated = 0;
     static inline std::vector<pravaha::EventKind> task_events{};
+    static inline std::vector<pravaha::JoinEvent> join_events{};
 
     static void reset() {
         lowered = 0;
         validated = 0;
         task_events.clear();
+        join_events.clear();
     }
 
     static void on_task_event(const pravaha::TaskEvent& e) noexcept {
         task_events.push_back(e.kind);
     }
-    static void on_join_event(const pravaha::JoinEvent&) noexcept {}
+    static void on_join_event(const pravaha::JoinEvent& e) noexcept { join_events.push_back(e); }
     static void on_graph_event(const pravaha::GraphEvent& e) noexcept {
         if (e.kind == pravaha::EventKind::GraphLowered) ++lowered;
         if (e.kind == pravaha::EventKind::GraphValidated) ++validated;
@@ -2180,5 +2182,113 @@ TEST_CASE("Runner emits TaskSkipped for downstream task after failure", "[pravah
     REQUIRE(failed_it != TestObserver::task_events.end());
     REQUIRE(skipped_it != TestObserver::task_events.end());
     REQUIRE(failed_it < skipped_it);
+}
+
+TEST_CASE("Runner emits JoinResolved for AllOrNothing success", "[pravaha][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+    ObservedRunner runner;
+    auto result = runner.submit(pravaha::task("a", []() {}) & pravaha::task("b", []() {}));
+
+    REQUIRE(result.has_value());
+    REQUIRE(TestObserver::join_events.size() == 1);
+    const auto& e = TestObserver::join_events.front();
+    REQUIRE(e.kind == pravaha::EventKind::JoinResolved);
+    REQUIRE(e.policy.kind == pravaha::JoinPolicyKind::AllOrNothing);
+    REQUIRE(e.success);
+    REQUIRE(e.expected == 2);
+    REQUIRE(e.succeeded == 2);
+    REQUIRE(e.failed == 0);
+    REQUIRE(e.canceled == 0);
+    REQUIRE(e.skipped == 0);
+}
+
+TEST_CASE("Runner emits JoinResolved for CollectAll failure", "[pravaha][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+    ObservedRunner runner;
+    auto result = runner.submit(pravaha::collect_all(
+        pravaha::task("ok", []() {})
+        &
+        pravaha::task("fail", []() -> pravaha::Outcome<pravaha::Unit> {
+            return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "fail"});
+        })
+    ));
+
+    REQUIRE(result.has_value());
+    REQUIRE(TestObserver::join_events.size() == 1);
+    const auto& e = TestObserver::join_events.front();
+    REQUIRE(e.kind == pravaha::EventKind::JoinResolved);
+    REQUIRE(e.policy.kind == pravaha::JoinPolicyKind::CollectAll);
+    REQUIRE_FALSE(e.success);
+    REQUIRE(e.expected == 2);
+    REQUIRE(e.succeeded == 1);
+    REQUIRE(e.failed == 1);
+    REQUIRE(e.canceled == 0);
+    REQUIRE(e.skipped == 0);
+}
+
+TEST_CASE("Runner emits one JoinResolved for AnySuccess", "[pravaha][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+    ObservedRunner runner;
+    auto result = runner.submit(pravaha::any_success(
+        pravaha::task("ok", []() {})
+        &
+        pravaha::task("fail", []() -> pravaha::Outcome<pravaha::Unit> {
+            return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "fail"});
+        })
+    ));
+
+    REQUIRE(result.has_value());
+    REQUIRE(TestObserver::join_events.size() == 1);
+    const auto& e = TestObserver::join_events.front();
+    REQUIRE(e.kind == pravaha::EventKind::JoinResolved);
+    REQUIRE(e.policy.kind == pravaha::JoinPolicyKind::AnySuccess);
+    REQUIRE(e.success);
+}
+
+TEST_CASE("Runner emits one JoinResolved for Quorum<1>", "[pravaha][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+    ObservedRunner runner;
+    auto result = runner.submit(pravaha::quorum<1>(
+        pravaha::task("ok", []() {})
+        &
+        pravaha::task("fail", []() -> pravaha::Outcome<pravaha::Unit> {
+            return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "fail"});
+        })
+    ));
+
+    REQUIRE(result.has_value());
+    REQUIRE(TestObserver::join_events.size() == 1);
+    const auto& e = TestObserver::join_events.front();
+    REQUIRE(e.kind == pravaha::EventKind::JoinResolved);
+    REQUIRE(e.policy.kind == pravaha::JoinPolicyKind::Quorum);
+    REQUIRE(e.success);
 }
 

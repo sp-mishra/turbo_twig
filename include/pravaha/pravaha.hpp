@@ -2098,6 +2098,31 @@ private:
         }
     }
 
+    void emit_join_resolved_transitions(const std::vector<JoinRuntimeState>& before, const RuntimeState& rt) {
+        if constexpr (Observer::enabled) {
+            for (std::size_t gid = 0; gid < rt.joins.size(); ++gid) {
+                if (gid >= before.size()) {
+                    continue;
+                }
+                if (before[gid].resolved || !rt.joins[gid].resolved) {
+                    continue;
+                }
+                const auto& join = rt.joins[gid];
+                Observer::on_join_event(JoinEvent{
+                    EventKind::JoinResolved,
+                    gid,
+                    join.policy,
+                    join.success,
+                    join.expected,
+                    join.succeeded,
+                    join.failed,
+                    join.canceled,
+                    join.skipped
+                });
+            }
+        }
+    }
+
     Outcome<RunResult> execute(TaskIr& ir) {
         auto sstate = std::make_shared<detail::SharedSchedulerState>();
         sstate->rt = RuntimeState::build(ir);
@@ -2170,8 +2195,10 @@ private:
             {
                 std::lock_guard lock(sstate->mutex);
                 std::vector<TaskState> before_states;
+                std::vector<JoinRuntimeState> before_joins;
                 if constexpr (Observer::enabled) {
                     before_states = sstate->rt.node_states;
+                    before_joins = sstate->rt.joins;
                 }
                 if (result.has_value()) {
                     sstate->rt.mark_succeeded(idx);
@@ -2181,6 +2208,7 @@ private:
                     emit_task_event(*ir_ptr, sstate->rt, idx, EventKind::TaskFailed);
                 }
                 emit_skip_cancel_transitions(*ir_ptr, before_states, sstate->rt);
+                emit_join_resolved_transitions(before_joins, sstate->rt);
                 sstate->count_terminals();
 
                 // Collect newly ready nodes
@@ -2216,8 +2244,10 @@ private:
             {
                 std::lock_guard lock(sstate->mutex);
                 std::vector<TaskState> before_states;
+                std::vector<JoinRuntimeState> before_joins;
                 if constexpr (Observer::enabled) {
                     before_states = sstate->rt.node_states;
+                    before_joins = sstate->rt.joins;
                 }
                 sstate->rt.mark_failed(idx, PravahaError{
                     ErrorKind::QueueRejected,
@@ -2225,6 +2255,7 @@ private:
                     ir.nodes[idx].name
                 });
                 emit_skip_cancel_transitions(ir, before_states, sstate->rt);
+                emit_join_resolved_transitions(before_joins, sstate->rt);
                 sstate->count_terminals();
                 (void)NoProgressPolicy::handle_no_progress(*sstate);
             }
