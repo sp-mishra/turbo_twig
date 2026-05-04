@@ -1984,6 +1984,40 @@ struct CompileOnlyObserver {
     static void on_graph_event(const pravaha::GraphEvent&) noexcept { ++graph_calls; }
 };
 
+struct DisabledObserver {
+    static constexpr bool enabled = false;
+    static inline int task_calls = 0;
+    static inline int join_calls = 0;
+    static inline int graph_calls = 0;
+
+    static void reset() {
+        task_calls = 0;
+        join_calls = 0;
+        graph_calls = 0;
+    }
+
+    static void on_task_event(const pravaha::TaskEvent&) noexcept { ++task_calls; }
+    static void on_join_event(const pravaha::JoinEvent&) noexcept { ++join_calls; }
+    static void on_graph_event(const pravaha::GraphEvent&) noexcept { ++graph_calls; }
+};
+
+struct EnabledObserver {
+    static constexpr bool enabled = true;
+    static inline int task_calls = 0;
+    static inline int join_calls = 0;
+    static inline int graph_calls = 0;
+
+    static void reset() {
+        task_calls = 0;
+        join_calls = 0;
+        graph_calls = 0;
+    }
+
+    static void on_task_event(const pravaha::TaskEvent&) noexcept { ++task_calls; }
+    static void on_join_event(const pravaha::JoinEvent&) noexcept { ++join_calls; }
+    static void on_graph_event(const pravaha::GraphEvent&) noexcept { ++graph_calls; }
+};
+
 struct TestObserver {
     static constexpr bool enabled = true;
     static inline int lowered = 0;
@@ -2076,6 +2110,8 @@ struct BadObserver {
 static_assert(pravaha::ObserverPolicy<pravaha::NoObserver>);
 static_assert(pravaha::ObserverPolicy<TestObserver>);
 static_assert(!pravaha::ObserverPolicy<BadObserver>);
+static_assert(pravaha::ObserverPolicy<DisabledObserver>);
+static_assert(pravaha::ObserverPolicy<EnabledObserver>);
 
 TEST_CASE("Runner policy slot - custom GraphAlgorithmPolicy is used", "[pravaha][runner][policy]") {
     CountingGraphPolicy::validate_calls = 0;
@@ -2157,6 +2193,43 @@ TEST_CASE("Runner policy slot - custom Observer slot compiles", "[pravaha][runne
     REQUIRE(CompileOnlyObserver::task_calls == 4);
     REQUIRE(CompileOnlyObserver::join_calls == 0);
     REQUIRE(CompileOnlyObserver::graph_calls == 2);
+}
+
+TEST_CASE("Runner policy slot - disabled observer emits no events", "[pravaha][runner][policy]") {
+    using DisabledRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        DisabledObserver>;
+
+    DisabledObserver::reset();
+
+    DisabledRunner runner;
+    auto result = runner.submit(pravaha::task("A", []() {}) | pravaha::task("B", []() {}));
+
+    REQUIRE(result.has_value());
+    REQUIRE(DisabledObserver::task_calls == 0);
+    REQUIRE(DisabledObserver::join_calls == 0);
+    REQUIRE(DisabledObserver::graph_calls == 0);
+}
+
+TEST_CASE("Runner policy slot - enabled observer emits events", "[pravaha][runner][policy]") {
+    using EnabledRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        EnabledObserver>;
+
+    EnabledObserver::reset();
+
+    EnabledRunner runner;
+    auto result = runner.submit(pravaha::task("A", []() {}) | pravaha::task("B", []() {}));
+
+    REQUIRE(result.has_value());
+    REQUIRE(EnabledObserver::task_calls > 0);
+    REQUIRE(EnabledObserver::graph_calls > 0);
 }
 
 TEST_CASE("Runner emits GraphLowered and GraphValidated events", "[pravaha][runner][observer]") {
