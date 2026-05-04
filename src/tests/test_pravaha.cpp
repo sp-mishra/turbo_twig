@@ -2018,6 +2018,25 @@ struct EnabledObserver {
     static void on_graph_event(const pravaha::GraphEvent&) noexcept { ++graph_calls; }
 };
 
+struct QueueWaitObserver {
+    static constexpr bool enabled = true;
+    static inline std::mutex mutex{};
+    static inline std::vector<pravaha::TaskEvent> task_events{};
+
+    static void reset() {
+        std::lock_guard lock(mutex);
+        task_events.clear();
+    }
+
+    static void on_task_event(const pravaha::TaskEvent& e) noexcept {
+        std::lock_guard lock(mutex);
+        task_events.push_back(e);
+    }
+
+    static void on_join_event(const pravaha::JoinEvent&) noexcept {}
+    static void on_graph_event(const pravaha::GraphEvent&) noexcept {}
+};
+
 struct TestObserver {
     static constexpr bool enabled = true;
     static inline int lowered = 0;
@@ -2487,5 +2506,49 @@ TEST_CASE("TraceObserver captures compact external trace", "[pravaha][runner][ob
     REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "task:scheduled:b") != TraceObserver::trace.end());
     REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "task:scheduled:c") != TraceObserver::trace.end());
     REQUIRE(std::find(TraceObserver::trace.begin(), TraceObserver::trace.end(), "join:resolved:success") != TraceObserver::trace.end());
+}
+
+TEST_CASE("Runner<JThreadBackend> exposes queue wait timing via task timestamps", "[pravaha][jthread][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::JThreadBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        QueueWaitObserver>;
+
+    QueueWaitObserver::reset();
+
+    pravaha::JThreadBackend backend(2);
+    ObservedRunner runner(backend);
+    auto result = runner.submit(pravaha::task("a", []() {}) | pravaha::task("b", []() {}));
+
+    REQUIRE(result.has_value());
+
+    std::vector<std::pair<pravaha::TaskId, std::uint64_t>> scheduled;
+    std::vector<std::pair<pravaha::TaskId, std::uint64_t>> started;
+    {
+        std::lock_guard lock(QueueWaitObserver::mutex);
+        for (const auto& e : QueueWaitObserver::task_events) {
+            if (e.kind == pravaha::EventKind::TaskScheduled) {
+                REQUIRE(e.timestamp_ns > 0);
+                scheduled.emplace_back(e.task_id, e.timestamp_ns);
+            }
+            if (e.kind == pravaha::EventKind::TaskStarted) {
+                REQUIRE(e.timestamp_ns > 0);
+                started.emplace_back(e.task_id, e.timestamp_ns);
+            }
+        }
+    }
+
+    REQUIRE(scheduled.size() >= 2);
+    REQUIRE(started.size() >= 2);
+
+    for (const auto& [task_id, started_ns] : started) {
+        const auto it = std::find_if(scheduled.begin(), scheduled.end(), [task_id](const auto& p) {
+            return p.first == task_id;
+        });
+        REQUIRE(it != scheduled.end());
+        REQUIRE(started_ns >= it->second);
+    }
 }
 
