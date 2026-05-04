@@ -1217,6 +1217,8 @@ struct RuntimeState {
     std::vector<std::vector<std::size_t>> node_join_groups;
     std::vector<PravahaError> errors;
     std::vector<IrJoinGroup> const* join_groups{nullptr};
+    CancellationSource cancellation_source{};
+    CancellationToken cancellation_token{};
     bool canceled{false};
 
     static RuntimeState build(const TaskIr& ir) {
@@ -1265,7 +1267,20 @@ struct RuntimeState {
             }
         }
 
+        rs.cancellation_token = rs.cancellation_source.token();
+
         return rs;
+    }
+
+    [[nodiscard]] bool cancellation_requested() const noexcept {
+        return canceled || cancellation_source.stop_requested() || cancellation_token.stop_requested();
+    }
+
+    void bind_cancellation(CancellationToken token) {
+        cancellation_token = std::move(token);
+        if (cancellation_token.stop_requested()) {
+            request_cancellation();
+        }
     }
 
     [[nodiscard]] bool is_in_collect_all_group(std::size_t idx) const {
@@ -1459,6 +1474,8 @@ struct RuntimeState {
     void release_successful_join_successors(std::size_t group_id) {
         if (!join_groups || group_id >= joins.size() || group_id >= join_groups->size()) return;
 
+        if (cancellation_requested()) return;
+
         const auto& join = joins[group_id];
         if (!join.resolved || !join.success) return;
         if (join.policy.kind != JoinPolicyKind::AnySuccess
@@ -1541,6 +1558,36 @@ struct RuntimeState {
         decrement_downstream(idx);
     }
 
+    bool mark_canceled(std::size_t idx) {
+        if (idx >= node_states.size()) return false;
+        auto& state = node_states[idx];
+        if (is_terminal_state(state) || state == TaskState::Running) return false;
+        state = TaskState::Canceled;
+        record_join_terminal_for_node(idx, TaskState::Canceled);
+        skip_downstream(idx);
+        return true;
+    }
+
+    bool request_cancellation() {
+        canceled = true;
+        cancellation_source.request_stop();
+        bool changed = false;
+        for (std::size_t i = 0; i < node_states.size(); ++i) {
+            const auto state = node_states[i];
+            if (state == TaskState::Created || state == TaskState::Ready || state == TaskState::Scheduled) {
+                changed = mark_canceled(i) || changed;
+            }
+        }
+        return changed;
+    }
+
+    bool synchronize_cancellation() {
+        if (!cancellation_requested()) {
+            return false;
+        }
+        return request_cancellation();
+    }
+
     void mark_failed_collect_all(std::size_t idx, PravahaError err) {
         if (idx >= node_states.size()) return;
         if (is_terminal_state(node_states[idx])) return;
@@ -1591,7 +1638,9 @@ struct RuntimeState {
             if (remaining_deps[succ] > 0) {
                 remaining_deps[succ]--;
                 if (remaining_deps[succ] == 0 && node_states[succ] == TaskState::Created) {
-                    if (has_failed_predecessor(succ) || !blocking_join_success_for_successor(succ)) {
+                    if (cancellation_requested()) {
+                        mark_canceled(succ);
+                    } else if (has_failed_predecessor(succ) || !blocking_join_success_for_successor(succ)) {
                         node_states[succ] = TaskState::Skipped;
                         record_join_terminal_for_node(succ, TaskState::Skipped);
                         skip_downstream(succ);
@@ -1666,7 +1715,7 @@ struct RuntimeState {
 
     void skip_downstream(std::size_t idx) {
         for (auto succ : successors[idx]) {
-            if (node_states[succ] == TaskState::Created || node_states[succ] == TaskState::Ready) {
+            if (node_states[succ] == TaskState::Created || node_states[succ] == TaskState::Ready || node_states[succ] == TaskState::Scheduled) {
                 node_states[succ] = TaskState::Skipped;
                 record_join_terminal_for_node(succ, TaskState::Skipped);
                 skip_downstream(succ);
@@ -2031,6 +2080,8 @@ template <
 class Runner {
     Backend* backend_{nullptr};
     Backend owned_backend_;
+    std::mutex run_state_mutex_;
+    std::weak_ptr<detail::SharedSchedulerState> active_state_;
 
 public:
     using observer_type = Observer;
@@ -2040,6 +2091,11 @@ public:
 
     template <IsPravahaExpr Expr>
     Outcome<RunResult> submit(Expr&& expr) {
+        return submit(std::forward<Expr>(expr), CancellationToken{});
+    }
+
+    template <IsPravahaExpr Expr>
+    Outcome<RunResult> submit(Expr&& expr, CancellationToken cancellation_token) {
         auto ir_result = lower_to_ir(std::forward<Expr>(expr));
         if (!ir_result.has_value()) return std::unexpected(ir_result.error());
         auto& ir = ir_result.value();
@@ -2070,10 +2126,29 @@ public:
         auto domain_check = validate_domain_constraints(ir);
         if (!domain_check.has_value()) return std::unexpected(domain_check.error());
 
-        return execute(ir);
+        return execute(ir, std::move(cancellation_token));
     }
 
-    void request_stop() noexcept { backend_->request_stop(); }
+    void request_stop() noexcept {
+        backend_->request_stop();
+
+        std::shared_ptr<detail::SharedSchedulerState> sstate;
+        {
+            std::lock_guard lock(run_state_mutex_);
+            sstate = active_state_.lock();
+        }
+        if (!sstate) {
+            return;
+        }
+
+        {
+            std::lock_guard lock(sstate->mutex);
+            sstate->rt.request_cancellation();
+            sstate->count_terminals();
+            sstate->note_scheduled_in_last_pass(0);
+        }
+        sstate->cv_done.notify_all();
+    }
 
     // Expose backend reference for parallel_reduce and other algorithms
     Backend& backend_ref() noexcept { return *backend_; }
@@ -2138,11 +2213,30 @@ private:
         }
     }
 
-    Outcome<RunResult> execute(TaskIr& ir) {
+    Outcome<RunResult> execute(TaskIr& ir, CancellationToken cancellation_token) {
         auto sstate = std::make_shared<detail::SharedSchedulerState>();
         sstate->rt = RuntimeState::build(ir);
         sstate->total_nodes = ir.nodes.size();
-        sstate->count_terminals();
+
+        {
+            std::lock_guard lock(sstate->mutex);
+            std::vector<TaskState> before_states;
+            std::vector<JoinRuntimeState> before_joins;
+            if constexpr (Observer::enabled) {
+                before_states = sstate->rt.node_states;
+                before_joins = sstate->rt.joins;
+            }
+            sstate->rt.bind_cancellation(std::move(cancellation_token));
+            sstate->rt.synchronize_cancellation();
+            emit_skip_cancel_transitions(ir, before_states, sstate->rt);
+            emit_join_resolved_transitions(before_joins, sstate->rt);
+            sstate->count_terminals();
+        }
+
+        {
+            std::lock_guard lock(run_state_mutex_);
+            active_state_ = sstate;
+        }
 
         // Submit initially ready nodes
         schedule_ready(ir, sstate);
@@ -2163,6 +2257,13 @@ private:
             sstate->cv_done.wait(lock, [&]() { return sstate->all_terminal(); });
         }
 
+        {
+            std::lock_guard lock(run_state_mutex_);
+            if (auto current = active_state_.lock(); current.get() == sstate.get()) {
+                active_state_.reset();
+            }
+        }
+
         return sstate->rt.finalize();
     }
 
@@ -2171,6 +2272,16 @@ private:
         std::vector<std::size_t> ready_indices;
         {
             std::lock_guard lock(sstate->mutex);
+            std::vector<TaskState> before_states;
+            std::vector<JoinRuntimeState> before_joins;
+            if constexpr (Observer::enabled) {
+                before_states = sstate->rt.node_states;
+                before_joins = sstate->rt.joins;
+            }
+            sstate->rt.synchronize_cancellation();
+            emit_skip_cancel_transitions(ir, before_states, sstate->rt);
+            emit_join_resolved_transitions(before_joins, sstate->rt);
+
             for (std::size_t i = 0; i < sstate->rt.node_states.size(); ++i) {
                 if (ReadyPolicy::is_ready(sstate->rt, i)) {
                     emit_task_event(ir, sstate->rt, i, EventKind::TaskReady);
@@ -2193,12 +2304,32 @@ private:
         auto* node_cmd_ptr = &ir.nodes[idx].command;
         auto* ir_ptr = &ir;
         auto wrapped = TaskCommand::make([this, idx, node_cmd_ptr, ir_ptr, sstate]() mutable {
+            bool run_node = false;
             {
                 std::lock_guard lock(sstate->mutex);
+                std::vector<TaskState> before_states;
+                std::vector<JoinRuntimeState> before_joins;
+                if constexpr (Observer::enabled) {
+                    before_states = sstate->rt.node_states;
+                    before_joins = sstate->rt.joins;
+                }
+                sstate->rt.synchronize_cancellation();
+                if (sstate->rt.cancellation_requested() && sstate->rt.node_states[idx] == TaskState::Scheduled) {
+                    sstate->rt.mark_canceled(idx);
+                }
                 if (!RuntimeState::is_terminal_state(sstate->rt.node_states[idx])) {
                     sstate->rt.node_states[idx] = TaskState::Running;
                     emit_task_event(*ir_ptr, sstate->rt, idx, EventKind::TaskStarted);
+                    run_node = true;
                 }
+                emit_skip_cancel_transitions(*ir_ptr, before_states, sstate->rt);
+                emit_join_resolved_transitions(before_joins, sstate->rt);
+                sstate->count_terminals();
+            }
+
+            if (!run_node) {
+                sstate->cv_done.notify_all();
+                return;
             }
 
             // Run the actual node command
@@ -2222,6 +2353,7 @@ private:
                     sstate->rt.mark_failed(idx, std::move(result.error()));
                     emit_task_event(*ir_ptr, sstate->rt, idx, EventKind::TaskFailed);
                 }
+                sstate->rt.synchronize_cancellation();
                 emit_skip_cancel_transitions(*ir_ptr, before_states, sstate->rt);
                 emit_join_resolved_transitions(before_joins, sstate->rt);
                 sstate->count_terminals();
@@ -2264,11 +2396,16 @@ private:
                     before_states = sstate->rt.node_states;
                     before_joins = sstate->rt.joins;
                 }
-                sstate->rt.mark_failed(idx, PravahaError{
-                    ErrorKind::QueueRejected,
-                    submit_result.error().message,
-                    ir.nodes[idx].name
-                });
+                if (sstate->rt.cancellation_requested()) {
+                    sstate->rt.mark_canceled(idx);
+                } else {
+                    sstate->rt.mark_failed(idx, PravahaError{
+                        ErrorKind::QueueRejected,
+                        submit_result.error().message,
+                        ir.nodes[idx].name
+                    });
+                }
+                sstate->rt.synchronize_cancellation();
                 emit_skip_cancel_transitions(ir, before_states, sstate->rt);
                 emit_join_resolved_transitions(before_joins, sstate->rt);
                 sstate->count_terminals();

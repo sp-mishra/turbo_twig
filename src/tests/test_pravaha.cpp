@@ -1358,6 +1358,164 @@ struct ControlledBackend {
     }
 };
 
+TEST_CASE("Runner cancellation - cancel before submit marks pending nodes canceled and skipped", "[pravaha][runner][cancellation]") {
+    pravaha::CancellationSource source;
+    source.request_stop();
+
+    std::atomic<int> ran{0};
+    pravaha::Runner<> runner;
+    auto expr =
+        pravaha::task("A", [&ran]() { ran.fetch_add(1); })
+        | pravaha::task("B", [&ran]() { ran.fetch_add(1); })
+        | pravaha::task("C", [&ran]() { ran.fetch_add(1); });
+
+    auto result = runner.submit(std::move(expr), source.token());
+    REQUIRE(result.has_value());
+    REQUIRE(ran.load() == 0);
+    REQUIRE(result->final_state == pravaha::TaskState::Canceled);
+    REQUIRE(result->node_states.size() == 3);
+    REQUIRE(result->node_states[0] == pravaha::TaskState::Canceled);
+    REQUIRE(result->node_states[1] == pravaha::TaskState::Skipped);
+    REQUIRE(result->node_states[2] == pravaha::TaskState::Skipped);
+}
+
+TEST_CASE("Runner cancellation - cancel after first task in sequence prevents downstream execution", "[pravaha][runner][cancellation]") {
+    auto wait_for_queue_at_least = [](ControlledBackend& backend, std::size_t min_size) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (backend.queue_size() >= min_size) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return backend.queue_size() >= min_size;
+    };
+
+    ControlledBackend backend;
+    pravaha::Runner<ControlledBackend> runner(backend);
+    std::atomic<int> first{0};
+    std::atomic<int> second{0};
+
+    auto expr =
+        pravaha::task("first", [&first]() { first.fetch_add(1); })
+        | pravaha::task("second", [&second]() { second.fetch_add(1); });
+
+    auto fut = std::async(std::launch::async, [&runner, expr = std::move(expr)]() mutable {
+        return runner.submit(std::move(expr));
+    });
+
+    REQUIRE(wait_for_queue_at_least(backend, 1));
+    REQUIRE(backend.run_front());
+    runner.request_stop();
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (fut.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready
+           && std::chrono::steady_clock::now() < deadline) {
+        if (!backend.run_front()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    REQUIRE(fut.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+    auto result = fut.get();
+    REQUIRE(result.has_value());
+    REQUIRE(first.load() == 1);
+    REQUIRE(second.load() == 0);
+    REQUIRE(result->final_state == pravaha::TaskState::Canceled);
+    REQUIRE(result->node_states[1] == pravaha::TaskState::Canceled);
+}
+
+TEST_CASE("Runner cancellation - cancel during parallel prevents unstarted branches from running", "[pravaha][runner][cancellation]") {
+    auto wait_for_queue_at_least = [](ControlledBackend& backend, std::size_t min_size) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (backend.queue_size() >= min_size) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return backend.queue_size() >= min_size;
+    };
+
+    ControlledBackend backend;
+    pravaha::Runner<ControlledBackend> runner(backend);
+    std::atomic<int> a_runs{0};
+    std::atomic<int> b_runs{0};
+
+    auto expr =
+        pravaha::task("A", [&a_runs]() { a_runs.fetch_add(1); })
+        & pravaha::task("B", [&b_runs]() { b_runs.fetch_add(1); });
+
+    auto fut = std::async(std::launch::async, [&runner, expr = std::move(expr)]() mutable {
+        return runner.submit(std::move(expr));
+    });
+
+    REQUIRE(wait_for_queue_at_least(backend, 2));
+    REQUIRE(backend.run_front());
+    runner.request_stop();
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (fut.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready
+           && std::chrono::steady_clock::now() < deadline) {
+        if (!backend.run_front()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    REQUIRE(fut.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+    auto result = fut.get();
+    REQUIRE(result.has_value());
+    REQUIRE(a_runs.load() + b_runs.load() == 1);
+    REQUIRE(result->final_state == pravaha::TaskState::Canceled);
+    REQUIRE(std::count(result->node_states.begin(), result->node_states.end(), pravaha::TaskState::Canceled) == 1);
+}
+
+TEST_CASE("Runner cancellation - running task may complete but downstream does not start", "[pravaha][runner][cancellation]") {
+    std::mutex gate_mutex;
+    std::condition_variable gate_cv;
+    bool started = false;
+    bool release = false;
+
+    std::atomic<int> first_runs{0};
+    std::atomic<int> second_runs{0};
+
+    pravaha::JThreadBackend backend(1);
+    pravaha::Runner<pravaha::JThreadBackend> runner(backend);
+
+    auto expr =
+        pravaha::task("first", [&]() {
+            std::unique_lock lock(gate_mutex);
+            started = true;
+            gate_cv.notify_all();
+            gate_cv.wait(lock, [&]() { return release; });
+            first_runs.fetch_add(1);
+        })
+        | pravaha::task("second", [&]() { second_runs.fetch_add(1); });
+
+    auto fut = std::async(std::launch::async, [&runner, expr = std::move(expr)]() mutable {
+        return runner.submit(std::move(expr));
+    });
+
+    {
+        std::unique_lock lock(gate_mutex);
+        gate_cv.wait(lock, [&]() { return started; });
+    }
+
+    runner.request_stop();
+
+    {
+        std::lock_guard lock(gate_mutex);
+        release = true;
+    }
+    gate_cv.notify_all();
+
+    REQUIRE(fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    auto result = fut.get();
+    REQUIRE(result.has_value());
+    REQUIRE(first_runs.load() == 1);
+    REQUIRE(second_runs.load() == 0);
+    REQUIRE(result->final_state == pravaha::TaskState::Canceled);
+    REQUIRE(result->node_states[0] == pravaha::TaskState::Succeeded);
+    REQUIRE(result->node_states[1] == pravaha::TaskState::Canceled);
+}
+
+
 TEST_CASE("Runner controlled backend - early release semantics", "[pravaha][runner][parallel][early-release][controlled]") {
     auto wait_for_queue_at_least = [](ControlledBackend& backend, std::size_t min_size) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
@@ -2343,6 +2501,30 @@ TEST_CASE("Runner emits TaskSkipped for downstream task after failure", "[pravah
     REQUIRE(failed_it != TestObserver::task_events.end());
     REQUIRE(skipped_it != TestObserver::task_events.end());
     REQUIRE(failed_it < skipped_it);
+}
+
+TEST_CASE("Runner emits TaskCanceled and TaskSkipped on cancellation", "[pravaha][runner][observer][cancellation]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+    pravaha::CancellationSource source;
+    source.request_stop();
+
+    ObservedRunner runner;
+    auto result = runner.submit(
+        pravaha::task("a", []() {})
+        | pravaha::task("b", []() {})
+        | pravaha::task("c", []() {}),
+        source.token());
+
+    REQUIRE(result.has_value());
+    REQUIRE(std::count(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskCanceled) >= 1);
+    REQUIRE(std::count(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskSkipped) >= 1);
 }
 
 TEST_CASE("Runner emits JoinResolved for AllOrNothing success", "[pravaha][runner][observer]") {
