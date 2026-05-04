@@ -833,6 +833,62 @@ TEST_CASE("lower_to_ir - Outcome<Unit> payload metadata unwraps to Unit", "[prav
     REQUIRE(result->nodes[0].payload_meta.output_type_name == std::string(meta::type_name<pravaha::Unit>()));
 }
 
+TEST_CASE("lower_to_ir - task returning int has checked output contract", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> int { return 1; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 1);
+
+    const auto expected = pravaha::make_type_contract<int>();
+    const auto& contract = result->nodes[0].output_contract;
+    REQUIRE(contract.checked);
+    REQUIRE(contract.type_hash == expected.type_hash);
+    REQUIRE(contract.type_name == expected.type_name);
+}
+
+TEST_CASE("lower_to_ir - Outcome<string> output contract unwraps to string", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> pravaha::Outcome<std::string> { return std::string{"ok"}; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 1);
+
+    const auto expected = pravaha::make_type_contract<std::string>();
+    const auto& contract = result->nodes[0].output_contract;
+    REQUIRE(contract.checked);
+    REQUIRE(contract.type_hash == expected.type_hash);
+    REQUIRE(contract.type_name == expected.type_name);
+}
+
+TEST_CASE("lower_to_ir - void output contract maps to Unit", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> void {});
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 1);
+
+    const auto expected = pravaha::make_type_contract<pravaha::Unit>();
+    const auto& contract = result->nodes[0].output_contract;
+    REQUIRE(contract.checked);
+    REQUIRE(contract.type_hash == expected.type_hash);
+    REQUIRE(contract.type_name == expected.type_name);
+}
+
+TEST_CASE("lower_to_ir - zero argument callable has unchecked input contract", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> int { return 1; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 1);
+    REQUIRE_FALSE(result->nodes[0].input_contract.checked);
+}
+
+TEST_CASE("callable contract helper infers single argument input contract", "[pravaha][ir][contract]") {
+    auto fn = [](int) -> std::string { return "x"; };
+    const auto contract = pravaha::detail::make_input_contract<decltype(fn)>();
+    const auto expected = pravaha::make_type_contract<int>();
+    REQUIRE(contract.checked);
+    REQUIRE(contract.type_hash == expected.type_hash);
+    REQUIRE(contract.type_name == expected.type_name);
+}
+
 TEST_CASE("lower_to_ir - parallel join group policy defaults to AllOrNothing", "[pravaha][ir][policy]") {
     auto expr = pravaha::task("a", []() {}) & pravaha::task("b", []() {});
     auto result = pravaha::lower_to_ir(std::move(expr));

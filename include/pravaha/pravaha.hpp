@@ -27,7 +27,9 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <type_traits>
+#include <typeindex>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -611,6 +613,30 @@ struct PayloadMeta {
     std::string output_type_name;
 };
 
+struct TypeContract {
+    bool checked{};
+    std::size_t type_hash{};
+    std::string type_name;
+};
+
+template<class T>
+TypeContract make_type_contract() {
+    using Normalized = std::remove_cvref_t<T>;
+    TypeContract contract;
+    contract.checked = true;
+    if constexpr (requires { meta::schema_hash<Normalized>(); }) {
+        contract.type_hash = static_cast<std::size_t>(meta::schema_hash<Normalized>());
+    } else {
+        contract.type_hash = std::type_index(typeid(Normalized)).hash_code();
+    }
+    if constexpr (requires { meta::type_name<Normalized>(); }) {
+        contract.type_name = std::string(meta::type_name<Normalized>());
+    } else {
+        contract.type_name = typeid(Normalized).name();
+    }
+    return contract;
+}
+
 struct IrNode {
     TaskId id;
     std::string name;
@@ -618,6 +644,8 @@ struct IrNode {
     TaskState state{TaskState::Created};
     TaskCommand command;
     PayloadMeta payload_meta;
+    TypeContract input_contract;
+    TypeContract output_contract;
     std::size_t frontend_hash{};
     std::string frontend_dump;
     IrNode() = default;
@@ -745,6 +773,49 @@ struct unwrap_outcome<Outcome<T>> {
 template <class T>
 using unwrap_outcome_t = typename unwrap_outcome<std::remove_cvref_t<T>>::type;
 
+template <class T>
+struct callable_traits;
+
+template <class R, class... Args>
+struct callable_traits<R(*)(Args...)> {
+    using result_type = R;
+    static constexpr std::size_t arity = sizeof...(Args);
+
+    template <std::size_t Index>
+    using arg_t = std::tuple_element_t<Index, std::tuple<Args...>>;
+};
+
+template <class C, class R, class... Args>
+struct callable_traits<R(C::*)(Args...)> {
+    using result_type = R;
+    static constexpr std::size_t arity = sizeof...(Args);
+
+    template <std::size_t Index>
+    using arg_t = std::tuple_element_t<Index, std::tuple<Args...>>;
+};
+
+template <class C, class R, class... Args>
+struct callable_traits<R(C::*)(Args...) const> {
+    using result_type = R;
+    static constexpr std::size_t arity = sizeof...(Args);
+
+    template <std::size_t Index>
+    using arg_t = std::tuple_element_t<Index, std::tuple<Args...>>;
+};
+
+template <class F>
+struct callable_traits : callable_traits<decltype(&std::remove_cvref_t<F>::operator())> {};
+
+template <class F>
+TypeContract make_input_contract() {
+    using Callable = std::remove_cvref_t<F>;
+    if constexpr (callable_traits<Callable>::arity == 1) {
+        using Arg = typename callable_traits<Callable>::template arg_t<0>;
+        return make_type_contract<Arg>();
+    }
+    return TypeContract{};
+}
+
 template <class F>
 using callable_payload_t = std::conditional_t<
     std::is_void_v<std::invoke_result_t<F>>,
@@ -812,6 +883,8 @@ LowerResult lower_impl(TaskExpr<F> expr) {
     TaskId id = add_node_from_source(result.ir, source, expr.domain(), std::move(cmd));
     using OutputT = callable_payload_t<F>;
     result.ir.nodes.back().payload_meta = make_payload_meta<OutputT>();
+    result.ir.nodes.back().output_contract = make_type_contract<OutputT>();
+    result.ir.nodes.back().input_contract = make_input_contract<F>();
     result.starts.push_back(id);
     result.terminals.push_back(id);
     return result;
