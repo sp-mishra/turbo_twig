@@ -1989,20 +1989,26 @@ struct TestObserver {
     static inline int lowered = 0;
     static inline int validated = 0;
     static inline std::vector<pravaha::EventKind> task_events{};
+    static inline std::vector<pravaha::TaskEvent> task_event_records{};
     static inline std::vector<pravaha::JoinEvent> join_events{};
+    static inline std::vector<pravaha::GraphEvent> graph_events{};
 
     static void reset() {
         lowered = 0;
         validated = 0;
         task_events.clear();
+        task_event_records.clear();
         join_events.clear();
+        graph_events.clear();
     }
 
     static void on_task_event(const pravaha::TaskEvent& e) noexcept {
         task_events.push_back(e.kind);
+        task_event_records.push_back(e);
     }
     static void on_join_event(const pravaha::JoinEvent& e) noexcept { join_events.push_back(e); }
     static void on_graph_event(const pravaha::GraphEvent& e) noexcept {
+        graph_events.push_back(e);
         if (e.kind == pravaha::EventKind::GraphLowered) ++lowered;
         if (e.kind == pravaha::EventKind::GraphValidated) ++validated;
     }
@@ -2290,5 +2296,35 @@ TEST_CASE("Runner emits one JoinResolved for Quorum<1>", "[pravaha][runner][obse
     REQUIRE(e.kind == pravaha::EventKind::JoinResolved);
     REQUIRE(e.policy.kind == pravaha::JoinPolicyKind::Quorum);
     REQUIRE(e.success);
+}
+
+TEST_CASE("Runner emits non-zero timestamps for task/join/graph events", "[pravaha][runner][observer]") {
+    using ObservedRunner = pravaha::Runner<
+        pravaha::InlineBackend,
+        pravaha::DefaultGraphAlgorithmPolicy,
+        pravaha::DefaultReadyPolicy,
+        pravaha::DefaultNoProgressPolicy,
+        TestObserver>;
+
+    TestObserver::reset();
+    ObservedRunner runner;
+    auto result = runner.submit(pravaha::any_success(
+        pravaha::task("ok", []() {})
+        &
+        pravaha::task("fail", []() -> pravaha::Outcome<pravaha::Unit> {
+            return std::unexpected(pravaha::PravahaError{pravaha::ErrorKind::TaskFailed, "fail"});
+        })
+    ));
+
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(TestObserver::task_event_records.empty());
+    REQUIRE_FALSE(TestObserver::join_events.empty());
+    REQUIRE_FALSE(TestObserver::graph_events.empty());
+    REQUIRE(std::all_of(TestObserver::task_event_records.begin(), TestObserver::task_event_records.end(),
+        [](const pravaha::TaskEvent& e) { return e.timestamp_ns > 0; }));
+    REQUIRE(std::all_of(TestObserver::join_events.begin(), TestObserver::join_events.end(),
+        [](const pravaha::JoinEvent& e) { return e.timestamp_ns > 0; }));
+    REQUIRE(std::all_of(TestObserver::graph_events.begin(), TestObserver::graph_events.end(),
+        [](const pravaha::GraphEvent& e) { return e.timestamp_ns > 0; }));
 }
 

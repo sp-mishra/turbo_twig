@@ -8,10 +8,12 @@
 #include <atomic>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <compare>
 #include <concepts>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <deque>
 #include <exception>
@@ -530,6 +532,7 @@ struct TaskEvent {
     std::string_view task_name{};
     TaskState state{};
     std::size_t frontend_hash{};
+    std::uint64_t timestamp_ns{};
 };
 
 struct JoinEvent {
@@ -542,6 +545,7 @@ struct JoinEvent {
     std::size_t failed{};
     std::size_t canceled{};
     std::size_t skipped{};
+    std::uint64_t timestamp_ns{};
 };
 
 struct GraphEvent {
@@ -549,6 +553,7 @@ struct GraphEvent {
     std::size_t node_count{};
     std::size_t edge_count{};
     std::size_t join_group_count{};
+    std::uint64_t timestamp_ns{};
 };
 
 struct NoObserver {
@@ -2043,7 +2048,8 @@ public:
                 EventKind::GraphLowered,
                 ir.nodes.size(),
                 ir.edges.size(),
-                ir.join_groups.size()
+                ir.join_groups.size(),
+                now_ns()
             });
         }
 
@@ -2055,7 +2061,8 @@ public:
                 EventKind::GraphValidated,
                 ir.nodes.size(),
                 ir.edges.size(),
-                ir.join_groups.size()
+                ir.join_groups.size(),
+                now_ns()
             });
         }
 
@@ -2071,6 +2078,11 @@ public:
     Backend& backend_ref() noexcept { return *backend_; }
 
 private:
+    static std::uint64_t now_ns() noexcept {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
     void emit_task_event(const TaskIr& ir, const RuntimeState& rt, std::size_t idx, EventKind kind) {
         if constexpr (Observer::enabled) {
             Observer::on_task_event(TaskEvent{
@@ -2078,7 +2090,8 @@ private:
                 ir.nodes[idx].id,
                 ir.nodes[idx].name,
                 rt.node_states[idx],
-                ir.nodes[idx].frontend_hash
+                ir.nodes[idx].frontend_hash,
+                now_ns()
             });
         }
     }
@@ -2117,7 +2130,8 @@ private:
                     join.succeeded,
                     join.failed,
                     join.canceled,
-                    join.skipped
+                    join.skipped,
+                    now_ns()
                 });
             }
         }
