@@ -1103,15 +1103,42 @@ LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr) {
 
 template <typename InRange, typename OutRange, typename Fn>
 LowerResult lower_impl(ParallelTransformExpr<InRange, OutRange, Fn> expr) {
-    static_assert(requires(const InRange& r) { r.size(); r[std::size_t{}]; });
+    static_assert(std::ranges::random_access_range<InRange>);
+    static_assert(std::ranges::sized_range<InRange>);
+    static_assert(std::ranges::random_access_range<OutRange>);
+    static_assert(std::invocable<Fn&, std::ranges::range_reference_t<InRange>>);
+    static_assert(std::assignable_from<
+        std::ranges::range_reference_t<OutRange>,
+        std::invoke_result_t<Fn&, std::ranges::range_reference_t<InRange>>
+    >);
 
     LowerResult result;
     const std::size_t total = static_cast<std::size_t>(expr.input.size());
     const std::size_t chunk_size = (expr.chunk_size == 0) ? 1 : expr.chunk_size;
     const std::size_t num_chunks = (total == 0) ? 0 : (total + chunk_size - 1) / chunk_size;
 
-    auto range_ptr = std::make_shared<InRange>(std::move(expr.input));
-    auto transform_ptr = std::make_shared<Fn>(std::move(expr.fn));
+    if constexpr (std::ranges::sized_range<OutRange>) {
+        const std::size_t output_total = static_cast<std::size_t>(expr.output.size());
+        if (output_total < total) {
+            auto cmd = TaskCommand::make([]() {
+                throw std::runtime_error("parallel_transform output range smaller than input range");
+            });
+            TaskId id = result.ir.add_node(
+                "parallel_transform.invalid_output_size",
+                ExecutionDomain::CPU,
+                std::move(cmd),
+                expr.frontend.hash,
+                expr.frontend.dump
+            );
+            result.starts.push_back(id);
+            result.terminals.push_back(id);
+            return result;
+        }
+    }
+
+    auto input_ptr = std::make_shared<InRange>(std::move(expr.input));
+    auto output_ptr = std::make_shared<OutRange>(std::move(expr.output));
+    auto fn_ptr = std::make_shared<Fn>(std::move(expr.fn));
     if (num_chunks == 0) {
         auto cmd = TaskCommand::make([]() {});
         TaskId id = result.ir.add_node(
@@ -1129,9 +1156,13 @@ LowerResult lower_impl(ParallelTransformExpr<InRange, OutRange, Fn> expr) {
     for (std::size_t i = 0; i < num_chunks; ++i) {
         const std::size_t begin = i * chunk_size;
         const std::size_t end = std::min(begin + chunk_size, total);
-        auto cmd = TaskCommand::make([range_ptr, transform_ptr, begin, end]() {
+        auto cmd = TaskCommand::make([input_ptr, output_ptr, fn_ptr, begin, end]() {
+            auto input_it = std::ranges::begin(*input_ptr);
+            auto output_it = std::ranges::begin(*output_ptr);
             for (std::size_t idx = begin; idx < end; ++idx) {
-                std::invoke(*transform_ptr, (*range_ptr)[idx]);
+                auto input_offset = static_cast<std::ranges::range_difference_t<InRange>>(idx);
+                auto output_offset = static_cast<std::ranges::range_difference_t<OutRange>>(idx);
+                *(output_it + output_offset) = std::invoke(*fn_ptr, *(input_it + input_offset));
             }
         });
         TaskId id = result.ir.add_node(

@@ -3133,3 +3133,97 @@ TEST_CASE("lazy_parallel_transform frontend hash changes with chunk size", "[pra
     REQUIRE(first.frontend.hash != second.frontend.hash);
 }
 
+TEST_CASE("Runner::submit(lazy_parallel_transform(...)) fills output correctly", "[pravaha][algorithms][parallel_transform][lazy][runner]") {
+    std::vector<int> input{1, 2, 3, 4, 5};
+    std::vector<int> output(input.size(), 0);
+
+    std::span<const int> in_view(input.data(), input.size());
+    std::span<int> out_view(output.data(), output.size());
+
+    auto expr = pravaha::lazy_parallel_transform(in_view, out_view, [](int v) {
+        return v * 10;
+    }, 2);
+
+    pravaha::Runner<> runner;
+    auto result = runner.submit(std::move(expr));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(output == std::vector<int>{10, 20, 30, 40, 50});
+}
+
+TEST_CASE("lazy_parallel_transform(...) | task runs task after transform", "[pravaha][algorithms][parallel_transform][lazy][runner]") {
+    std::vector<int> input{1, 2, 3, 4};
+    std::vector<int> output(input.size(), 0);
+    int after_ran = 0;
+
+    std::span<const int> in_view(input.data(), input.size());
+    std::span<int> out_view(output.data(), output.size());
+
+    auto expr = pravaha::lazy_parallel_transform(in_view, out_view, [](int v) {
+        return v + 1;
+    }, 2) | pravaha::task("after", [&]() {
+        if (output != std::vector<int>{2, 3, 4, 5}) {
+            throw std::runtime_error("transform incomplete");
+        }
+        ++after_ran;
+    });
+
+    pravaha::Runner<> runner;
+    auto result = runner.submit(std::move(expr));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(after_ran == 1);
+}
+
+TEST_CASE("task | lazy_parallel_transform(...) runs transform after before", "[pravaha][algorithms][parallel_transform][lazy][runner]") {
+    std::vector<int> input{3, 4, 5};
+    std::vector<int> output(input.size(), 0);
+    std::atomic<bool> before_done{false};
+
+    std::span<const int> in_view(input.data(), input.size());
+    std::span<int> out_view(output.data(), output.size());
+
+    auto expr = pravaha::task("before", [&]() {
+        before_done.store(true);
+    }) | pravaha::lazy_parallel_transform(in_view, out_view, [&](int v) {
+        if (!before_done.load()) {
+            throw std::runtime_error("before not complete");
+        }
+        return v * 2;
+    }, 2);
+
+    pravaha::Runner<> runner;
+    auto result = runner.submit(std::move(expr));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(output == std::vector<int>{6, 8, 10});
+}
+
+TEST_CASE("lazy_parallel_transform failure blocks downstream under AllOrNothing", "[pravaha][algorithms][parallel_transform][lazy][runner]") {
+    std::vector<int> input{1, 2, 3, 4, 5};
+    std::vector<int> output(input.size(), 0);
+    int after_ran = 0;
+
+    std::span<const int> in_view(input.data(), input.size());
+    std::span<int> out_view(output.data(), output.size());
+
+    auto expr = pravaha::lazy_parallel_transform(in_view, out_view, [](int v) {
+        if (v == 3) {
+            throw std::runtime_error("transform failure");
+        }
+        return v;
+    }, 2) | pravaha::task("after", [&]() {
+        ++after_ran;
+    });
+
+    pravaha::Runner<> runner;
+    auto result = runner.submit(std::move(expr));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    REQUIRE(after_ran == 0);
+}
+
