@@ -1732,14 +1732,33 @@ struct RuntimeState {
         decrement_downstream(idx);
     }
 
-    bool mark_canceled(std::size_t idx) {
+    void skip_downstream_from_cancellation(std::size_t idx) {
+        if (idx >= successors.size()) return;
+        for (auto succ : successors[idx]) {
+            if (succ >= node_states.size()) continue;
+            auto& succ_state = node_states[succ];
+            if (succ_state == TaskState::Created || succ_state == TaskState::Ready || succ_state == TaskState::Scheduled) {
+                succ_state = TaskState::Skipped;
+                record_join_terminal_for_node(succ, TaskState::Skipped);
+                skip_downstream_from_cancellation(succ);
+            }
+        }
+    }
+
+    bool mark_canceled_from_request(std::size_t idx) {
         if (idx >= node_states.size()) return false;
         auto& state = node_states[idx];
-        if (is_terminal_state(state) || state == TaskState::Running) return false;
-        state = TaskState::Canceled;
-        record_join_terminal_for_node(idx, TaskState::Canceled);
-        skip_downstream(idx);
-        return true;
+        if (state == TaskState::Created || state == TaskState::Ready || state == TaskState::Scheduled) {
+            state = TaskState::Canceled;
+            record_join_terminal_for_node(idx, TaskState::Canceled);
+            skip_downstream_from_cancellation(idx);
+            return true;
+        }
+        return false;
+    }
+
+    bool mark_canceled(std::size_t idx) {
+        return mark_canceled_from_request(idx);
     }
 
     bool request_cancellation() {
@@ -1749,7 +1768,7 @@ struct RuntimeState {
         for (std::size_t i = 0; i < node_states.size(); ++i) {
             const auto state = node_states[i];
             if (state == TaskState::Created || state == TaskState::Ready || state == TaskState::Scheduled) {
-                changed = mark_canceled(i) || changed;
+                changed = mark_canceled_from_request(i) || changed;
             }
         }
         return changed;
