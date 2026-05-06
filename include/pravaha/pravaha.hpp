@@ -296,7 +296,7 @@ template <typename L, typename R> struct SequenceExpr;
 template <typename L, typename R> struct ParallelExpr;
 template <typename Range, typename Init, typename MapFn, typename ReduceFn> struct ParallelReduceExpr;
 template <typename Range, typename BodyFn> struct ParallelForExpr;
-template <typename Range, typename TransformFn> struct ParallelTransformExpr;
+template <typename InRange, typename OutRange, typename Fn> struct ParallelTransformExpr;
 
 namespace detail {
 template <typename T> struct is_pravaha_expr_impl : std::false_type {};
@@ -307,8 +307,8 @@ template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 struct is_pravaha_expr_impl<ParallelReduceExpr<Range, Init, MapFn, ReduceFn>> : std::true_type {};
 template <typename Range, typename BodyFn>
 struct is_pravaha_expr_impl<ParallelForExpr<Range, BodyFn>> : std::true_type {};
-template <typename Range, typename TransformFn>
-struct is_pravaha_expr_impl<ParallelTransformExpr<Range, TransformFn>> : std::true_type {};
+template <typename InRange, typename OutRange, typename Fn>
+struct is_pravaha_expr_impl<ParallelTransformExpr<InRange, OutRange, Fn>> : std::true_type {};
 
 template <typename RangeLike>
 [[nodiscard]] auto range_size_hint(const RangeLike& range) {
@@ -382,11 +382,12 @@ struct ParallelForExpr {
     symbolic::LitheFrontendMeta frontend;
 };
 
-template <typename Range, typename TransformFn>
+template <typename InRange, typename OutRange, typename Fn>
 struct ParallelTransformExpr {
-    Range range;
+    InRange input;
+    OutRange output;
+    Fn fn;
     std::size_t chunk_size{};
-    TransformFn transform;
     symbolic::LitheFrontendMeta frontend;
 };
 
@@ -449,18 +450,20 @@ template <typename Range, typename BodyFn>
     return lazy_parallel_for(std::forward<Range>(range), std::forward<BodyFn>(body), chunk_size);
 }
 
-template <typename Range, typename TransformFn>
-[[nodiscard]] auto lazy_parallel_transform(Range&& range, std::size_t chunk_size, TransformFn&& transform) {
-    using RangeT = std::decay_t<Range>;
-    using TransformT = std::decay_t<TransformFn>;
+template <typename InRange, typename OutRange, typename Fn>
+[[nodiscard]] auto lazy_parallel_transform(InRange&& input, OutRange&& output, Fn&& fn, std::size_t chunk_size = 1024) {
+    using InRangeT = std::decay_t<InRange>;
+    using OutRangeT = std::decay_t<OutRange>;
+    using FnT = std::decay_t<Fn>;
 
-    ParallelTransformExpr<RangeT, TransformT> expr{
-        std::forward<Range>(range),
+    ParallelTransformExpr<InRangeT, OutRangeT, FnT> expr{
+        std::forward<InRange>(input),
+        std::forward<OutRange>(output),
+        std::forward<Fn>(fn),
         chunk_size,
-        std::forward<TransformFn>(transform),
         {}
     };
-    const auto [has_size, range_size] = detail::range_size_hint(expr.range);
+    const auto [has_size, range_size] = detail::range_size_hint(expr.input);
     expr.frontend = symbolic::lithe_frontend::make_parallel_transform_meta(chunk_size, range_size, has_size);
     return expr;
 }
@@ -859,8 +862,8 @@ template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 LowerResult lower_impl(ParallelReduceExpr<Range, Init, MapFn, ReduceFn> expr);
 template <typename Range, typename BodyFn>
 LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr);
-template <typename Range, typename TransformFn>
-LowerResult lower_impl(ParallelTransformExpr<Range, TransformFn> expr);
+template <typename InRange, typename OutRange, typename Fn>
+LowerResult lower_impl(ParallelTransformExpr<InRange, OutRange, Fn> expr);
 
 template <typename T>
 PayloadMeta make_payload_meta() {
@@ -1098,17 +1101,17 @@ LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr) {
     return result;
 }
 
-template <typename Range, typename TransformFn>
-LowerResult lower_impl(ParallelTransformExpr<Range, TransformFn> expr) {
-    static_assert(requires(const Range& r) { r.size(); r[std::size_t{}]; });
+template <typename InRange, typename OutRange, typename Fn>
+LowerResult lower_impl(ParallelTransformExpr<InRange, OutRange, Fn> expr) {
+    static_assert(requires(const InRange& r) { r.size(); r[std::size_t{}]; });
 
     LowerResult result;
-    const std::size_t total = static_cast<std::size_t>(expr.range.size());
+    const std::size_t total = static_cast<std::size_t>(expr.input.size());
     const std::size_t chunk_size = (expr.chunk_size == 0) ? 1 : expr.chunk_size;
     const std::size_t num_chunks = (total == 0) ? 0 : (total + chunk_size - 1) / chunk_size;
 
-    auto range_ptr = std::make_shared<Range>(std::move(expr.range));
-    auto transform_ptr = std::make_shared<TransformFn>(std::move(expr.transform));
+    auto range_ptr = std::make_shared<InRange>(std::move(expr.input));
+    auto transform_ptr = std::make_shared<Fn>(std::move(expr.fn));
     if (num_chunks == 0) {
         auto cmd = TaskCommand::make([]() {});
         TaskId id = result.ir.add_node(
