@@ -376,10 +376,9 @@ struct ParallelReduceExpr {
 
 template <typename Range, typename BodyFn>
 struct ParallelForExpr {
-    std::string name;
     Range range;
+    BodyFn fn;
     std::size_t chunk_size{};
-    BodyFn body;
     symbolic::LitheFrontendMeta frontend;
 };
 
@@ -430,20 +429,24 @@ template <typename Range, typename Init, typename MapFn, typename ReduceFn>
 }
 
 template <typename Range, typename BodyFn>
-[[nodiscard]] auto lazy_parallel_for(std::string name, Range&& range, std::size_t chunk_size, BodyFn&& body) {
+[[nodiscard]] auto lazy_parallel_for(Range&& range, BodyFn&& body, std::size_t chunk_size = 1024) {
     using RangeT = std::decay_t<Range>;
     using BodyT = std::decay_t<BodyFn>;
 
     ParallelForExpr<RangeT, BodyT> expr{
-        std::move(name),
         std::forward<Range>(range),
-        chunk_size,
         std::forward<BodyFn>(body),
+        chunk_size,
         {}
     };
     const auto [has_size, range_size] = detail::range_size_hint(expr.range);
     expr.frontend = symbolic::lithe_frontend::make_parallel_for_meta(chunk_size, range_size, has_size);
     return expr;
+}
+
+template <typename Range, typename BodyFn>
+[[nodiscard]] auto lazy_parallel_for(std::string, Range&& range, std::size_t chunk_size, BodyFn&& body) {
+    return lazy_parallel_for(std::forward<Range>(range), std::forward<BodyFn>(body), chunk_size);
 }
 
 template <typename Range, typename TransformFn>
@@ -1056,11 +1059,11 @@ LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr) {
     const std::size_t chunk_size = (expr.chunk_size == 0) ? 1 : expr.chunk_size;
     const std::size_t num_chunks = (total == 0) ? 0 : (total + chunk_size - 1) / chunk_size;
 
-    auto body_ptr = std::make_shared<BodyFn>(std::move(expr.body));
+    auto body_ptr = std::make_shared<BodyFn>(std::move(expr.fn));
     if (num_chunks == 0) {
         auto cmd = TaskCommand::make([]() {});
         TaskId id = result.ir.add_node(
-            expr.name + ".empty",
+            "parallel_for.empty",
             ExecutionDomain::CPU,
             std::move(cmd),
             expr.frontend.hash,
@@ -1078,7 +1081,7 @@ LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr) {
             std::invoke(*body_ptr, begin, end);
         });
         TaskId id = result.ir.add_node(
-            expr.name + ".chunk." + std::to_string(i),
+            "parallel_for.chunk." + std::to_string(i),
             ExecutionDomain::CPU,
             std::move(cmd),
             expr.frontend.hash,

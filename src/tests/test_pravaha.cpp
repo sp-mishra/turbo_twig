@@ -2976,6 +2976,37 @@ TEST_CASE("parallel_for_eager executes immediately", "[pravaha][algorithms][para
     REQUIRE(std::all_of(values.begin(), values.end(), [](int v) { return v == 1; }));
 }
 
+TEST_CASE("lazy_parallel_for construction does not execute body", "[pravaha][algorithms][parallel_for][lazy]") {
+    std::vector<int> values(8, 0);
+    int calls = 0;
+
+    auto expr = pravaha::lazy_parallel_for(values, [&](std::size_t, std::size_t) {
+        ++calls;
+    });
+
+    REQUIRE(calls == 0);
+    REQUIRE(expr.frontend.hash != 0);
+}
+
+TEST_CASE("lazy_parallel_for frontend hash is stable for same shape", "[pravaha][algorithms][parallel_for][lazy]") {
+    std::vector<int> left(16, 0);
+    std::vector<int> right(16, 0);
+
+    auto first = pravaha::lazy_parallel_for(left, [](std::size_t, std::size_t) {}, 4);
+    auto second = pravaha::lazy_parallel_for(right, [](std::size_t, std::size_t) {}, 4);
+
+    REQUIRE(first.frontend.hash == second.frontend.hash);
+}
+
+TEST_CASE("lazy_parallel_for frontend hash changes with chunk size", "[pravaha][algorithms][parallel_for][lazy]") {
+    std::vector<int> values(16, 0);
+
+    auto first = pravaha::lazy_parallel_for(values, [](std::size_t, std::size_t) {}, 2);
+    auto second = pravaha::lazy_parallel_for(values, [](std::size_t, std::size_t) {}, 8);
+
+    REQUIRE(first.frontend.hash != second.frontend.hash);
+}
+
 TEST_CASE("parallel_transform_eager executes immediately", "[pravaha][algorithms][parallel_transform][eager]") {
     std::vector<int> values{1, 2, 3, 4};
     int elements_called = 0;
