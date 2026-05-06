@@ -806,21 +806,26 @@ struct callable_traits<R(C::*)(Args...) const> {
 template <class F>
 struct callable_traits : callable_traits<decltype(&std::remove_cvref_t<F>::operator())> {};
 
+template<class F>
+constexpr bool has_single_input_v = (callable_traits<std::remove_cvref_t<F>>::arity == 1);
+
 template <class F>
 TypeContract make_input_contract() {
-    using Callable = std::remove_cvref_t<F>;
-    if constexpr (callable_traits<Callable>::arity == 1) {
-        using Arg = typename callable_traits<Callable>::template arg_t<0>;
+    if constexpr (has_single_input_v<F>) {
+        using Arg = typename callable_traits<std::remove_cvref_t<F>>::template arg_t<0>;
         return make_type_contract<Arg>();
     }
     return TypeContract{};
 }
 
 template <class F>
+using callable_result_t = typename callable_traits<std::remove_cvref_t<F>>::result_type;
+
+template <class F>
 using callable_payload_t = std::conditional_t<
-    std::is_void_v<std::invoke_result_t<F>>,
+    std::is_void_v<callable_result_t<F>>,
     Unit,
-    unwrap_outcome_t<std::invoke_result_t<F>>
+    unwrap_outcome_t<callable_result_t<F>>
 >;
 
 struct LowerResult {
@@ -879,7 +884,12 @@ template <typename F>
 LowerResult lower_impl(TaskExpr<F> expr) {
     LowerResult result;
     const symbolic::LitheSymbolicSource source{expr.frontend, expr.name()};
-    auto cmd = TaskCommand::make(std::move(expr.callable()), expr.name());
+    TaskCommand cmd;
+    if constexpr (std::invocable<std::decay_t<F>>) {
+        cmd = TaskCommand::make(std::move(expr.callable()), expr.name());
+    } else {
+        cmd = TaskCommand::make([]() {}, expr.name());
+    }
     TaskId id = add_node_from_source(result.ir, source, expr.domain(), std::move(cmd));
     using OutputT = callable_payload_t<F>;
     result.ir.nodes.back().payload_meta = make_payload_meta<OutputT>();

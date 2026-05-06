@@ -878,15 +878,54 @@ TEST_CASE("lower_to_ir - zero argument callable has unchecked input contract", "
     REQUIRE(result.has_value());
     REQUIRE(result->nodes.size() == 1);
     REQUIRE_FALSE(result->nodes[0].input_contract.checked);
+    const auto expected_output = pravaha::make_type_contract<int>();
+    REQUIRE(result->nodes[0].output_contract.checked);
+    REQUIRE(result->nodes[0].output_contract.type_hash == expected_output.type_hash);
 }
 
-TEST_CASE("callable contract helper infers single argument input contract", "[pravaha][ir][contract]") {
-    auto fn = [](int) -> std::string { return "x"; };
-    const auto contract = pravaha::detail::make_input_contract<decltype(fn)>();
-    const auto expected = pravaha::make_type_contract<int>();
-    REQUIRE(contract.checked);
-    REQUIRE(contract.type_hash == expected.type_hash);
-    REQUIRE(contract.type_name == expected.type_name);
+TEST_CASE("lower_to_ir - single argument callable has checked input and checked output contract", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", [](int) -> std::string { return "x"; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 1);
+
+    const auto expected_input = pravaha::make_type_contract<int>();
+    const auto expected_output = pravaha::make_type_contract<std::string>();
+    REQUIRE(result->nodes[0].input_contract.checked);
+    REQUIRE(result->nodes[0].input_contract.type_hash == expected_input.type_hash);
+    REQUIRE(result->nodes[0].output_contract.checked);
+    REQUIRE(result->nodes[0].output_contract.type_hash == expected_output.type_hash);
+}
+
+TEST_CASE("lower_to_ir - const reference input callable has checked input contract", "[pravaha][ir][contract]") {
+    struct MyType {
+        int value{};
+    };
+
+    auto expr = pravaha::task("a", [](const MyType&) -> pravaha::Outcome<pravaha::Unit> {
+        return pravaha::Unit{};
+    });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 1);
+
+    const auto expected_input = pravaha::make_type_contract<MyType>();
+    const auto expected_output = pravaha::make_type_contract<pravaha::Unit>();
+    REQUIRE(result->nodes[0].input_contract.checked);
+    REQUIRE(result->nodes[0].input_contract.type_hash == expected_input.type_hash);
+    REQUIRE(result->nodes[0].output_contract.checked);
+    REQUIRE(result->nodes[0].output_contract.type_hash == expected_output.type_hash);
+}
+
+TEST_CASE("lower_to_ir - multi argument callable has unchecked input contract", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", [](int, int) -> int { return 1; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 1);
+    REQUIRE_FALSE(result->nodes[0].input_contract.checked);
+    const auto expected_output = pravaha::make_type_contract<int>();
+    REQUIRE(result->nodes[0].output_contract.checked);
+    REQUIRE(result->nodes[0].output_contract.type_hash == expected_output.type_hash);
 }
 
 TEST_CASE("lower_to_ir - parallel join group policy defaults to AllOrNothing", "[pravaha][ir][policy]") {
