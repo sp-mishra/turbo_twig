@@ -3702,9 +3702,8 @@ Outcome<TaskIr> lower_parallel_for(ParallelForResult<F>& pf) {
 }
 
 template <typename Range, typename F>
-    requires std::invocable<F, std::size_t, std::size_t>
 auto parallel_for(std::string name, Range&& range, std::size_t chunk_size, F&& body) {
-    return parallel_for_eager(std::move(name), std::forward<Range>(range), chunk_size, std::forward<F>(body));
+    return lazy_parallel_for(std::move(name), std::forward<Range>(range), chunk_size, std::forward<F>(body));
 }
 
 template <typename Range, typename F>

@@ -2976,11 +2976,11 @@ TEST_CASE("parallel_for_eager executes immediately", "[pravaha][algorithms][para
     REQUIRE(std::all_of(values.begin(), values.end(), [](int v) { return v == 1; }));
 }
 
-TEST_CASE("lazy_parallel_for construction does not execute body", "[pravaha][algorithms][parallel_for][lazy]") {
+TEST_CASE("parallel_for construction does not execute body", "[pravaha][algorithms][parallel_for][lazy]") {
     std::vector<int> values(8, 0);
     int calls = 0;
 
-    auto expr = pravaha::lazy_parallel_for(values, [&](std::size_t, std::size_t) {
+    auto expr = pravaha::parallel_for("pf", values, 3, [&](int) {
         ++calls;
     });
 
@@ -3007,17 +3007,17 @@ TEST_CASE("lazy_parallel_for frontend hash changes with chunk size", "[pravaha][
     REQUIRE(first.frontend.hash != second.frontend.hash);
 }
 
-TEST_CASE("Runner::submit(lazy_parallel_for(...)) executes all items", "[pravaha][algorithms][parallel_for][lazy][runner]") {
+TEST_CASE("Runner::submit(parallel_for(...)) executes all items", "[pravaha][algorithms][parallel_for][lazy][runner]") {
     constexpr std::size_t item_count = 10;
     std::vector<int> values(item_count, 1);
     std::atomic<int> seen{0};
 
     pravaha::Runner<> runner;
-    auto expr = pravaha::lazy_parallel_for(values, [&](int v) {
+    auto expr = pravaha::parallel_for("pf", values, 3, [&](int v) {
         if (v == 1) {
             seen.fetch_add(1);
         }
-    }, 3);
+    });
     auto result = runner.submit(std::move(expr));
 
     REQUIRE(result.has_value());
