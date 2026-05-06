@@ -3757,9 +3757,14 @@ decltype(auto) parallel_transform_eager(Range&& range, std::size_t chunk_size, F
     return std::forward<Range>(range);
 }
 
-template <typename Range, typename F>
-decltype(auto) parallel_transform(Range&& range, std::size_t chunk_size, F&& transform) {
-    return parallel_transform_eager(std::forward<Range>(range), chunk_size, std::forward<F>(transform));
+template <typename InRange, typename OutRange, typename F>
+[[nodiscard]] auto parallel_transform(InRange&& input, OutRange&& output, F&& transform, std::size_t chunk_size = 1024) {
+    return lazy_parallel_transform(
+        std::forward<InRange>(input),
+        std::forward<OutRange>(output),
+        std::forward<F>(transform),
+        chunk_size
+    );
 }
 
 template <typename T>

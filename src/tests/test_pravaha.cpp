@@ -3108,12 +3108,15 @@ TEST_CASE("parallel_transform_eager executes immediately", "[pravaha][algorithms
     REQUIRE(values == std::vector<int>{10, 20, 30, 40});
 }
 
-TEST_CASE("lazy_parallel_transform construction does not execute fn", "[pravaha][algorithms][parallel_transform][lazy]") {
+TEST_CASE("parallel_transform construction does not execute fn", "[pravaha][algorithms][parallel_transform][lazy]") {
     std::vector<int> input{1, 2, 3, 4};
     std::vector<int> output(input.size(), 0);
     int calls = 0;
 
-    auto expr = pravaha::lazy_parallel_transform(input, output, [&](int) {
+    std::span<const int> in_view(input.data(), input.size());
+    std::span<int> out_view(output.data(), output.size());
+
+    auto expr = pravaha::parallel_transform(in_view, out_view, [&](int) {
         ++calls;
         return 0;
     });
@@ -3133,14 +3136,14 @@ TEST_CASE("lazy_parallel_transform frontend hash changes with chunk size", "[pra
     REQUIRE(first.frontend.hash != second.frontend.hash);
 }
 
-TEST_CASE("Runner::submit(lazy_parallel_transform(...)) fills output correctly", "[pravaha][algorithms][parallel_transform][lazy][runner]") {
+TEST_CASE("Runner::submit(parallel_transform(...)) fills output correctly", "[pravaha][algorithms][parallel_transform][lazy][runner]") {
     std::vector<int> input{1, 2, 3, 4, 5};
     std::vector<int> output(input.size(), 0);
 
     std::span<const int> in_view(input.data(), input.size());
     std::span<int> out_view(output.data(), output.size());
 
-    auto expr = pravaha::lazy_parallel_transform(in_view, out_view, [](int v) {
+    auto expr = pravaha::parallel_transform(in_view, out_view, [](int v) {
         return v * 10;
     }, 2);
 
