@@ -1052,13 +1052,16 @@ LowerResult lower_impl(ParallelReduceExpr<Range, Init, MapFn, ReduceFn> expr) {
 
 template <typename Range, typename BodyFn>
 LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr) {
-    static_assert(requires(const Range& r) { r.size(); });
+    static_assert(std::ranges::random_access_range<Range>);
+    static_assert(std::ranges::sized_range<Range>);
+    static_assert(std::invocable<BodyFn&, decltype(std::declval<Range&>()[std::size_t{}])>);
 
     LowerResult result;
     const std::size_t total = static_cast<std::size_t>(expr.range.size());
     const std::size_t chunk_size = (expr.chunk_size == 0) ? 1 : expr.chunk_size;
     const std::size_t num_chunks = (total == 0) ? 0 : (total + chunk_size - 1) / chunk_size;
 
+    auto range_ptr = std::make_shared<Range>(std::move(expr.range));
     auto body_ptr = std::make_shared<BodyFn>(std::move(expr.fn));
     if (num_chunks == 0) {
         auto cmd = TaskCommand::make([]() {});
@@ -1077,8 +1080,10 @@ LowerResult lower_impl(ParallelForExpr<Range, BodyFn> expr) {
     for (std::size_t i = 0; i < num_chunks; ++i) {
         const std::size_t begin = i * chunk_size;
         const std::size_t end = std::min(begin + chunk_size, total);
-        auto cmd = TaskCommand::make([body_ptr, begin, end]() {
-            std::invoke(*body_ptr, begin, end);
+        auto cmd = TaskCommand::make([range_ptr, body_ptr, begin, end]() {
+            for (std::size_t idx = begin; idx < end; ++idx) {
+                std::invoke(*body_ptr, (*range_ptr)[idx]);
+            }
         });
         TaskId id = result.ir.add_node(
             "parallel_for.chunk." + std::to_string(i),

@@ -3007,6 +3007,93 @@ TEST_CASE("lazy_parallel_for frontend hash changes with chunk size", "[pravaha][
     REQUIRE(first.frontend.hash != second.frontend.hash);
 }
 
+TEST_CASE("Runner::submit(lazy_parallel_for(...)) executes all items", "[pravaha][algorithms][parallel_for][lazy][runner]") {
+    constexpr std::size_t item_count = 10;
+    std::vector<int> values(item_count, 1);
+    std::atomic<int> seen{0};
+
+    pravaha::Runner<> runner;
+    auto expr = pravaha::lazy_parallel_for(values, [&](int v) {
+        if (v == 1) {
+            seen.fetch_add(1);
+        }
+    }, 3);
+    auto result = runner.submit(std::move(expr));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(seen.load() == static_cast<int>(item_count));
+}
+
+TEST_CASE("lazy_parallel_for(...) | task runs task after all chunks", "[pravaha][algorithms][parallel_for][lazy][runner]") {
+    constexpr std::size_t item_count = 12;
+    std::vector<int> values(item_count, 1);
+    std::atomic<int> seen{0};
+    int after_ran = 0;
+
+    auto expr = pravaha::lazy_parallel_for(values, [&](int v) {
+        if (v == 1) {
+            seen.fetch_add(1);
+        }
+    }, 4) | pravaha::task("after", [&]() {
+        if (seen.load() != static_cast<int>(item_count)) {
+            throw std::runtime_error("parallel_for incomplete");
+        }
+        ++after_ran;
+    });
+
+    pravaha::Runner<> runner;
+    auto result = runner.submit(std::move(expr));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(after_ran == 1);
+}
+
+TEST_CASE("task | lazy_parallel_for(...) runs chunks after before", "[pravaha][algorithms][parallel_for][lazy][runner]") {
+    std::vector<int> values(9, 1);
+    std::atomic<bool> before_done{false};
+    std::atomic<int> seen{0};
+
+    auto expr = pravaha::task("before", [&]() {
+        before_done.store(true);
+    }) | pravaha::lazy_parallel_for(values, [&](int v) {
+        if (!before_done.load()) {
+            throw std::runtime_error("before not complete");
+        }
+        if (v == 1) {
+            seen.fetch_add(1);
+        }
+    }, 2);
+
+    pravaha::Runner<> runner;
+    auto result = runner.submit(std::move(expr));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Succeeded);
+    REQUIRE(seen.load() == 9);
+}
+
+TEST_CASE("lazy_parallel_for failure blocks downstream under AllOrNothing", "[pravaha][algorithms][parallel_for][lazy][runner]") {
+    std::vector<int> values{0, 1, 2, 3, 4, 5};
+    int after_ran = 0;
+
+    auto expr = pravaha::lazy_parallel_for(values, [&](int v) {
+        if (v == 3) {
+            throw std::runtime_error("chunk failure");
+        }
+    }, 2) | pravaha::task("after", [&]() {
+        ++after_ran;
+    });
+
+    pravaha::Runner<> runner;
+    auto result = runner.submit(std::move(expr));
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Failed);
+    REQUIRE(after_ran == 0);
+}
+
 TEST_CASE("parallel_transform_eager executes immediately", "[pravaha][algorithms][parallel_transform][eager]") {
     std::vector<int> values{1, 2, 3, 4};
     int elements_called = 0;
