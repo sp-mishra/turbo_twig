@@ -1227,6 +1227,55 @@ inline Outcome<Unit> validate_ir_with_litegraph(const TaskIr& ir) {
     return Unit{};
 }
 
+inline Outcome<Unit> validate_data_contracts(const TaskIr& ir) {
+    auto find_node = [&](TaskId id) -> const IrNode* {
+        if (id.value < ir.nodes.size() && ir.nodes[id.value].id == id) {
+            return &ir.nodes[id.value];
+        }
+        auto it = std::find_if(ir.nodes.begin(), ir.nodes.end(), [&](const IrNode& node) {
+            return node.id == id;
+        });
+        if (it == ir.nodes.end()) {
+            return nullptr;
+        }
+        return &*it;
+    };
+
+    for (const auto& edge : ir.edges) {
+        if (edge.kind != EdgeKind::Sequence && edge.kind != EdgeKind::Data) {
+            continue;
+        }
+
+        const IrNode* from = find_node(edge.from);
+        const IrNode* to = find_node(edge.to);
+        if (from == nullptr || to == nullptr) {
+            return std::unexpected(PravahaError{
+                ErrorKind::ValidationError,
+                "Invalid edge endpoint: TaskId not found in IR nodes"
+            });
+        }
+
+        if (!from->output_contract.checked || !to->input_contract.checked) {
+            continue;
+        }
+
+        if (from->output_contract.type_hash == to->input_contract.type_hash) {
+            continue;
+        }
+
+        std::string message = "Type mismatch on edge '" + from->name + "' -> '" + to->name
+            + "': output '" + from->output_contract.type_name
+            + "' does not match input '" + to->input_contract.type_name + "'";
+        return std::unexpected(PravahaError{
+            ErrorKind::TypeMismatch,
+            std::move(message),
+            to->name
+        });
+    }
+
+    return Unit{};
+}
+
 // ---------------------------------------------------------------------------
 // 8.5 topological_order - compute execution order using LiteGraph
 // ---------------------------------------------------------------------------
@@ -2205,6 +2254,9 @@ public:
                 now_ns()
             });
         }
+
+        auto contract_check = validate_data_contracts(ir);
+        if (!contract_check.has_value()) return std::unexpected(contract_check.error());
 
         auto domain_check = validate_domain_constraints(ir);
         if (!domain_check.has_value()) return std::unexpected(domain_check.error());

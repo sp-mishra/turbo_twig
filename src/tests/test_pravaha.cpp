@@ -928,6 +928,68 @@ TEST_CASE("lower_to_ir - multi argument callable has unchecked input contract", 
     REQUIRE(result->nodes[0].output_contract.type_hash == expected_output.type_hash);
 }
 
+TEST_CASE("validate_data_contracts - int output to int input passes", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> int { return 1; })
+        | pravaha::task("b", [](int) -> pravaha::Unit { return {}; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    auto validation = pravaha::validate_data_contracts(result.value());
+    REQUIRE(validation.has_value());
+}
+
+TEST_CASE("validate_data_contracts - int output to string input fails TypeMismatch", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> int { return 1; })
+        | pravaha::task("b", [](std::string) -> pravaha::Unit { return {}; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    auto validation = pravaha::validate_data_contracts(result.value());
+    REQUIRE_FALSE(validation.has_value());
+    REQUIRE(validation.error().kind == pravaha::ErrorKind::TypeMismatch);
+    REQUIRE(validation.error().message.find("a") != std::string::npos);
+    REQUIRE(validation.error().message.find("b") != std::string::npos);
+    REQUIRE(validation.error().message.find(pravaha::make_type_contract<int>().type_name) != std::string::npos);
+    REQUIRE(validation.error().message.find(pravaha::make_type_contract<std::string>().type_name) != std::string::npos);
+}
+
+TEST_CASE("validate_data_contracts - unchecked input contract passes", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> int { return 1; })
+        | pravaha::task("b", [](int, int) -> pravaha::Unit { return {}; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    auto validation = pravaha::validate_data_contracts(result.value());
+    REQUIRE(validation.has_value());
+}
+
+TEST_CASE("validate_data_contracts - unchecked output contract passes", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> int { return 1; })
+        | pravaha::task("b", [](std::string) -> pravaha::Unit { return {}; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    REQUIRE(result->nodes.size() == 2);
+    result->nodes[0].output_contract.checked = false;
+    auto validation = pravaha::validate_data_contracts(result.value());
+    REQUIRE(validation.has_value());
+}
+
+TEST_CASE("validate_data_contracts - Outcome<int> output to int input passes", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> pravaha::Outcome<int> { return 7; })
+        | pravaha::task("b", [](int) -> pravaha::Unit { return {}; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    auto validation = pravaha::validate_data_contracts(result.value());
+    REQUIRE(validation.has_value());
+}
+
+TEST_CASE("validate_data_contracts - Outcome<string> output to int input fails", "[pravaha][ir][contract]") {
+    auto expr = pravaha::task("a", []() -> pravaha::Outcome<std::string> { return std::string{"x"}; })
+        | pravaha::task("b", [](int) -> pravaha::Unit { return {}; });
+    auto result = pravaha::lower_to_ir(std::move(expr));
+    REQUIRE(result.has_value());
+    auto validation = pravaha::validate_data_contracts(result.value());
+    REQUIRE_FALSE(validation.has_value());
+    REQUIRE(validation.error().kind == pravaha::ErrorKind::TypeMismatch);
+}
+
 TEST_CASE("lower_to_ir - parallel join group policy defaults to AllOrNothing", "[pravaha][ir][policy]") {
     auto expr = pravaha::task("a", []() {}) & pravaha::task("b", []() {});
     auto result = pravaha::lower_to_ir(std::move(expr));
@@ -1399,6 +1461,17 @@ TEST_CASE("Runner - LiteGraph validation is called before execution", "[pravaha]
     REQUIRE(result.has_value());
     REQUIRE(counter == 2);
     REQUIRE(result.value().final_state == pravaha::TaskState::Succeeded);
+}
+
+TEST_CASE("Runner - data contract validation is called before execution", "[pravaha][runner]") {
+    int counter = 0;
+    pravaha::Runner<> runner;
+    auto expr = pravaha::task("a", [&counter]() -> int { ++counter; return 1; })
+        | pravaha::task("b", [](std::string) -> pravaha::Unit { return {}; });
+    auto result = runner.submit(std::move(expr));
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().kind == pravaha::ErrorKind::TypeMismatch);
+    REQUIRE(counter == 0);
 }
 
 struct ControlledBackend {
