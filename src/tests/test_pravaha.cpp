@@ -2960,3 +2960,33 @@ TEST_CASE("Runner<JThreadBackend> exposes queue wait timing via task timestamps"
     }
 }
 
+TEST_CASE("parallel_for_eager executes immediately", "[pravaha][algorithms][parallel_for][eager]") {
+    std::vector<int> values(7, 0);
+    int chunks_called = 0;
+
+    auto result = pravaha::parallel_for_eager("pf", values, 3, [&](std::size_t begin, std::size_t end) {
+        ++chunks_called;
+        for (std::size_t i = begin; i < end; ++i) {
+            values[i] = 1;
+        }
+    });
+
+    REQUIRE(chunks_called == 3);
+    REQUIRE(result.chunk_count == 3);
+    REQUIRE(std::all_of(values.begin(), values.end(), [](int v) { return v == 1; }));
+}
+
+TEST_CASE("parallel_transform_eager executes immediately", "[pravaha][algorithms][parallel_transform][eager]") {
+    std::vector<int> values{1, 2, 3, 4};
+    int elements_called = 0;
+
+    auto&& out = pravaha::parallel_transform_eager(values, 2, [&](int& v) {
+        ++elements_called;
+        v *= 10;
+    });
+
+    REQUIRE(&out == &values);
+    REQUIRE(elements_called == 4);
+    REQUIRE(values == std::vector<int>{10, 20, 30, 40});
+}
+

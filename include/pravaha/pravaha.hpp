@@ -3661,9 +3661,11 @@ struct ParallelForResult {
 };
 
 template <typename Range, typename F>
-    requires std::invocable<F, std::size_t, std::size_t>
-auto parallel_for_eager(std::string name, Range& range, std::size_t chunk_size, F&& body) {
-    std::size_t total = range.size();
+    requires std::invocable<F&, std::size_t, std::size_t>
+auto parallel_for_eager(std::string name, Range&& range, std::size_t chunk_size, F&& body) {
+    auto& range_ref = range;
+    auto body_fn = std::forward<F>(body);
+    std::size_t total = range_ref.size();
     if (chunk_size == 0) chunk_size = 1;
     std::size_t num_chunks = (total + chunk_size - 1) / chunk_size;
 
@@ -3671,10 +3673,7 @@ auto parallel_for_eager(std::string name, Range& range, std::size_t chunk_size, 
     AlgorithmTree tree(AlgorithmTreeNode{name, 0, total});
     auto* root_node = tree.get_root();
 
-    // Build TaskIr with parallel chunk tasks
     TaskIr ir;
-    std::vector<TaskId> chunk_ids;
-    chunk_ids.reserve(num_chunks);
 
     for (std::size_t i = 0; i < num_chunks; ++i) {
         std::size_t b = i * chunk_size;
@@ -3683,14 +3682,10 @@ auto parallel_for_eager(std::string name, Range& range, std::size_t chunk_size, 
         // Add to NAryTree hierarchy
         tree.insert(root_node, AlgorithmTreeNode{name + "_chunk_" + std::to_string(i), b, e});
 
-        // Create chunk task command
-        auto cmd = TaskCommand::make([&body, b, e]() { body(b, e); });
-        TaskId id = ir.add_node(name + "_chunk_" + std::to_string(i), ExecutionDomain::CPU, std::move(cmd));
-        chunk_ids.push_back(id);
+        std::invoke(body_fn, b, e);
     }
 
-    // No edges between chunks — they are all parallel (AllOrNothing)
-    return ParallelForResult<F>{std::move(ir), std::move(tree), num_chunks};
+    return ParallelForResult<std::decay_t<F>>{std::move(ir), std::move(tree), num_chunks};
 }
 
 template <typename F>
@@ -3701,12 +3696,29 @@ Outcome<TaskIr> lower_parallel_for(ParallelForResult<F>& pf) {
 template <typename Range, typename F>
     requires std::invocable<F, std::size_t, std::size_t>
 auto parallel_for(std::string name, Range&& range, std::size_t chunk_size, F&& body) {
-    return lazy_parallel_for(std::move(name), std::forward<Range>(range), chunk_size, std::forward<F>(body));
+    return parallel_for_eager(std::move(name), std::forward<Range>(range), chunk_size, std::forward<F>(body));
 }
 
 template <typename Range, typename F>
-auto parallel_transform(Range&& range, std::size_t chunk_size, F&& transform) {
-    return lazy_parallel_transform(std::forward<Range>(range), chunk_size, std::forward<F>(transform));
+decltype(auto) parallel_transform_eager(Range&& range, std::size_t chunk_size, F&& transform) {
+    auto& range_ref = range;
+    auto transform_fn = std::forward<F>(transform);
+    if (chunk_size == 0) chunk_size = 1;
+    const std::size_t total = static_cast<std::size_t>(range_ref.size());
+
+    for (std::size_t begin = 0; begin < total; begin += chunk_size) {
+        const std::size_t end = std::min(begin + chunk_size, total);
+        for (std::size_t idx = begin; idx < end; ++idx) {
+            std::invoke(transform_fn, range_ref[idx]);
+        }
+    }
+
+    return std::forward<Range>(range);
+}
+
+template <typename Range, typename F>
+decltype(auto) parallel_transform(Range&& range, std::size_t chunk_size, F&& transform) {
+    return parallel_transform_eager(std::forward<Range>(range), chunk_size, std::forward<F>(transform));
 }
 
 template <typename T>
