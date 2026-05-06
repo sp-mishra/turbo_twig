@@ -990,6 +990,64 @@ TEST_CASE("validate_data_contracts - Outcome<string> output to int input fails",
     REQUIRE(validation.error().kind == pravaha::ErrorKind::TypeMismatch);
 }
 
+TEST_CASE("lower_symbolic_pipeline - registry int to int contract passes", "[pravaha][symbolic][contract]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { a then b }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_task("a", []() -> int { return 1; });
+    reg.register_task("b", [](int) -> pravaha::Unit { return {}; });
+
+    auto ir = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir.has_value());
+
+    auto validation = pravaha::validate_data_contracts(ir.value());
+    REQUIRE(validation.has_value());
+}
+
+TEST_CASE("lower_symbolic_pipeline - registry int to string contract fails TypeMismatch", "[pravaha][symbolic][contract]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { a then b }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_task("a", []() -> int { return 1; });
+    reg.register_task("b", [](std::string) -> pravaha::Unit { return {}; });
+
+    auto ir = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir.has_value());
+
+    auto validation = pravaha::validate_data_contracts(ir.value());
+    REQUIRE_FALSE(validation.has_value());
+    REQUIRE(validation.error().kind == pravaha::ErrorKind::TypeMismatch);
+}
+
+TEST_CASE("lower_symbolic_pipeline - registry Outcome<string> to string contract passes", "[pravaha][symbolic][contract]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { a then b }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_task("a", []() -> pravaha::Outcome<std::string> { return std::string{"ok"}; });
+    reg.register_task("b", [](std::string) -> pravaha::Unit { return {}; });
+
+    auto ir = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE(ir.has_value());
+
+    auto validation = pravaha::validate_data_contracts(ir.value());
+    REQUIRE(validation.has_value());
+}
+
+TEST_CASE("lower_symbolic_pipeline - missing symbol returns SymbolNotFound", "[pravaha][symbolic][contract]") {
+    auto parsed = pravaha::parse_pipeline("pipeline p { a then b }");
+    REQUIRE(parsed.has_value());
+
+    pravaha::SymbolRegistry reg;
+    reg.register_task("a", []() -> int { return 1; });
+
+    auto ir = pravaha::lower_symbolic_pipeline(parsed.value(), reg);
+    REQUIRE_FALSE(ir.has_value());
+    REQUIRE(ir.error().kind == pravaha::ErrorKind::SymbolNotFound);
+}
+
 TEST_CASE("lower_to_ir - parallel join group policy defaults to AllOrNothing", "[pravaha][ir][policy]") {
     auto expr = pravaha::task("a", []() {}) & pravaha::task("b", []() {});
     auto result = pravaha::lower_to_ir(std::move(expr));

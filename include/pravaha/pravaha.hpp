@@ -3491,25 +3491,52 @@ inline Outcome<symbolic::SymbolicPipeline> parse_pipeline(std::string_view text)
 // ============================================================================
 
 class SymbolRegistry {
-    struct Entry { std::string name; TaskCommand cmd; };
+    struct Entry {
+        std::string name;
+        TaskCommand cmd;
+        TypeContract input_contract;
+        TypeContract output_contract;
+    };
     std::vector<Entry> entries_;
 public:
     SymbolRegistry() = default;
 
-    template <typename F> requires std::move_constructible<std::decay_t<F>> && std::invocable<std::decay_t<F>>
+    template <typename F> requires std::move_constructible<std::decay_t<F>>
     void register_task(std::string name, F&& f) {
         std::string debug_name{name};
-        auto cmd = TaskCommand::make(std::forward<F>(f), debug_name);
-        entries_.push_back(Entry{std::move(name), std::move(cmd)});
+        using OutputT = detail::callable_payload_t<F>;
+        TaskCommand cmd;
+        if constexpr (std::invocable<std::decay_t<F>>) {
+            cmd = TaskCommand::make(std::forward<F>(f), debug_name);
+        } else {
+            cmd = TaskCommand::make([]() {}, debug_name);
+        }
+        entries_.push_back(Entry{
+            std::move(name),
+            std::move(cmd),
+            detail::make_input_contract<F>(),
+            make_type_contract<OutputT>()
+        });
     }
 
     void register_command(std::string name, TaskCommand cmd) {
-        entries_.push_back(Entry{std::move(name), std::move(cmd)});
+        entries_.push_back(Entry{std::move(name), std::move(cmd), TypeContract{}, TypeContract{}});
     }
 
-    TaskCommand* find(const std::string& name) {
-        for (auto& e : entries_) if (e.name == name) return &e.cmd;
-        return nullptr;
+    bool find(const std::string& name, TaskCommand*& cmd, const TypeContract*& input_contract,
+        const TypeContract*& output_contract) {
+        for (auto& e : entries_) {
+            if (e.name == name) {
+                cmd = &e.cmd;
+                input_contract = &e.input_contract;
+                output_contract = &e.output_contract;
+                return true;
+            }
+        }
+        cmd = nullptr;
+        input_contract = nullptr;
+        output_contract = nullptr;
+        return false;
     }
 };
 
@@ -3520,8 +3547,10 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
 
     if (auto* task = std::get_if<symbolic::SymbolicTaskExpr>(&expr)) {
         const symbolic::LitheSymbolicSource source{task->frontend, task->name};
-        auto* cmd_ptr = reg.find(task->name);
-        if (!cmd_ptr) {
+        TaskCommand* cmd_ptr = nullptr;
+        const TypeContract* input_contract = nullptr;
+        const TypeContract* output_contract = nullptr;
+        if (!reg.find(task->name, cmd_ptr, input_contract, output_contract)) {
             std::string msg = "Symbol not found: " + task->name;
             if (source.frontend.hash != 0) {
                 msg += " [frontend_hash=" + std::to_string(source.frontend.hash) + "]";
@@ -3532,6 +3561,12 @@ inline Outcome<Unit> lower_symbolic_expr(const symbolic::SymbolicExpr& expr, Sym
         auto* raw = cmd_ptr;
         auto wrapper = TaskCommand::make([raw]() -> Outcome<Unit> { return raw->run(); });
         TaskId id = add_node_from_source(ir, source, ExecutionDomain::CPU, std::move(wrapper));
+        if (input_contract) {
+            ir.nodes.back().input_contract = *input_contract;
+        }
+        if (output_contract) {
+            ir.nodes.back().output_contract = *output_contract;
+        }
         starts.push_back(id);
         terminals.push_back(id);
         return Unit{};
