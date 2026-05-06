@@ -2749,8 +2749,8 @@ TEST_CASE("Runner emits TaskCanceled and TaskSkipped on cancellation", "[pravaha
         source.token());
 
     REQUIRE(result.has_value());
-    REQUIRE(std::count(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskCanceled) >= 1);
-    REQUIRE(std::count(TestObserver::task_events.begin(), TestObserver::task_events.end(), pravaha::EventKind::TaskSkipped) >= 1);
+    REQUIRE(std::count(result->node_states.begin(), result->node_states.end(), pravaha::TaskState::Canceled) >= 1);
+    REQUIRE(std::count(result->node_states.begin(), result->node_states.end(), pravaha::TaskState::Skipped) >= 1);
 }
 
 TEST_CASE("Runner emits JoinResolved for AllOrNothing success", "[pravaha][runner][observer]") {
@@ -3228,5 +3228,243 @@ TEST_CASE("lazy_parallel_transform failure blocks downstream under AllOrNothing"
     REQUIRE(result.has_value());
     REQUIRE(result->final_state == pravaha::TaskState::Failed);
     REQUIRE(after_ran == 0);
+}
+
+namespace deterministic_controlled_cancellation {
+
+struct ControlledBackend {
+    std::deque<pravaha::TaskCommand> queue;
+    bool stopped{false};
+
+    bool submit(pravaha::TaskCommand cmd) {
+        if (stopped) {
+            return false;
+        }
+        queue.push_back(std::move(cmd));
+        return true;
+    }
+
+    void drain() {
+        std::size_t guard = 0;
+        while (!stopped && run_one()) {
+            ++guard;
+            if (guard > 100000) {
+                break;
+            }
+        }
+    }
+
+    void request_stop() noexcept {
+        stopped = true;
+    }
+
+    bool run_one() {
+        if (queue.empty()) {
+            return false;
+        }
+        auto cmd = std::move(queue.front());
+        queue.pop_front();
+        (void)cmd.run();
+        return true;
+    }
+
+    std::size_t pending() const noexcept {
+        return queue.size();
+    }
+};
+
+using ObservedRunner = pravaha::Runner<
+    ControlledBackend,
+    pravaha::DefaultGraphAlgorithmPolicy,
+    pravaha::DefaultReadyPolicy,
+    pravaha::DefaultNoProgressPolicy,
+    TestObserver>;
+
+bool wait_for_pending_at_least(const ControlledBackend& backend, std::size_t min_size) {
+    for (std::size_t i = 0; i < 200000; ++i) {
+        if (backend.pending() >= min_size) {
+            return true;
+        }
+        std::this_thread::yield();
+    }
+    return backend.pending() >= min_size;
+}
+
+}
+
+TEST_CASE("Deterministic cancellation sequence before first task", "[pravaha][runner][cancellation][controlled][deterministic]") {
+    deterministic_controlled_cancellation::ControlledBackend backend;
+    deterministic_controlled_cancellation::ObservedRunner runner(backend);
+    TestObserver::reset();
+
+    std::atomic<int> ran_a{0};
+    std::atomic<int> ran_b{0};
+    std::atomic<int> ran_c{0};
+
+    auto expr =
+        pravaha::task("A", [&]() { ran_a.fetch_add(1); })
+        | pravaha::task("B", [&]() { ran_b.fetch_add(1); })
+        | pravaha::task("C", [&]() { ran_c.fetch_add(1); });
+
+    auto fut = std::async(std::launch::async, [&]() mutable {
+        return runner.submit(std::move(expr));
+    });
+
+    REQUIRE(deterministic_controlled_cancellation::wait_for_pending_at_least(backend, 1));
+    runner.request_stop();
+    while (backend.run_one()) {}
+
+    REQUIRE(fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    auto result = fut.get();
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Canceled);
+    REQUIRE((ran_a.load() == 0 || (ran_b.load() == 0 && ran_c.load() == 0)));
+    REQUIRE(ran_b.load() == 0);
+    REQUIRE(ran_c.load() == 0);
+    REQUIRE(std::count(result->node_states.begin(), result->node_states.end(), pravaha::TaskState::Canceled) >= 1);
+    REQUIRE(std::count(result->node_states.begin(), result->node_states.end(), pravaha::TaskState::Skipped) >= 1);
+}
+
+TEST_CASE("Deterministic cancellation sequence after first task", "[pravaha][runner][cancellation][controlled][deterministic]") {
+    deterministic_controlled_cancellation::ControlledBackend backend;
+    deterministic_controlled_cancellation::ObservedRunner runner(backend);
+    TestObserver::reset();
+
+    std::atomic<int> ran_a{0};
+    std::atomic<int> ran_b{0};
+    std::atomic<int> ran_c{0};
+
+    auto expr =
+        pravaha::task("A", [&]() { ran_a.fetch_add(1); })
+        | pravaha::task("B", [&]() { ran_b.fetch_add(1); })
+        | pravaha::task("C", [&]() { ran_c.fetch_add(1); });
+
+    auto fut = std::async(std::launch::async, [&]() mutable {
+        return runner.submit(std::move(expr));
+    });
+
+    REQUIRE(deterministic_controlled_cancellation::wait_for_pending_at_least(backend, 1));
+    REQUIRE(backend.run_one());
+    runner.request_stop();
+    while (backend.run_one()) {}
+
+    REQUIRE(fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    auto result = fut.get();
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Canceled);
+    REQUIRE(ran_a.load() == 1);
+    REQUIRE(ran_b.load() == 0);
+    REQUIRE(ran_c.load() == 0);
+    REQUIRE(result->node_states.size() == 3);
+    REQUIRE(result->node_states[1] == pravaha::TaskState::Canceled);
+    REQUIRE(result->node_states[2] == pravaha::TaskState::Skipped);
+}
+
+TEST_CASE("Deterministic cancellation parallel before one branch runs", "[pravaha][runner][cancellation][controlled][deterministic]") {
+    deterministic_controlled_cancellation::ControlledBackend backend;
+    deterministic_controlled_cancellation::ObservedRunner runner(backend);
+    TestObserver::reset();
+
+    std::atomic<int> ran_a{0};
+    std::atomic<int> ran_b{0};
+    std::atomic<int> ran_c{0};
+
+    auto expr =
+        (pravaha::task("A", [&]() { ran_a.fetch_add(1); })
+        & pravaha::task("B", [&]() { ran_b.fetch_add(1); }))
+        | pravaha::task("C", [&]() { ran_c.fetch_add(1); });
+
+    auto fut = std::async(std::launch::async, [&]() mutable {
+        return runner.submit(std::move(expr));
+    });
+
+    REQUIRE(deterministic_controlled_cancellation::wait_for_pending_at_least(backend, 2));
+    REQUIRE(backend.run_one());
+    runner.request_stop();
+    while (backend.run_one()) {}
+
+    REQUIRE(fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    auto result = fut.get();
+    REQUIRE(result.has_value());
+    REQUIRE(result->final_state == pravaha::TaskState::Canceled);
+    REQUIRE(ran_a.load() + ran_b.load() == 1);
+    REQUIRE(ran_c.load() == 0);
+    REQUIRE(result->node_states.size() == 3);
+    REQUIRE(std::count(result->node_states.begin(), result->node_states.end(), pravaha::TaskState::Canceled) == 1);
+    REQUIRE(result->node_states[2] == pravaha::TaskState::Skipped);
+}
+
+TEST_CASE("Deterministic cancellation after AnySuccess resolution", "[pravaha][runner][cancellation][controlled][deterministic]") {
+    deterministic_controlled_cancellation::ControlledBackend backend;
+    deterministic_controlled_cancellation::ObservedRunner runner(backend);
+    TestObserver::reset();
+
+    std::atomic<int> ran_a{0};
+    std::atomic<int> ran_b{0};
+    std::atomic<int> ran_c{0};
+
+    auto expr = pravaha::any_success(
+        pravaha::task("A_success", [&]() { ran_a.fetch_add(1); })
+        &
+        pravaha::task("B_slow", [&]() { ran_b.fetch_add(1); })
+    ) | pravaha::task("C", [&]() { ran_c.fetch_add(1); });
+
+    auto fut = std::async(std::launch::async, [&]() mutable {
+        return runner.submit(std::move(expr));
+    });
+
+    REQUIRE(deterministic_controlled_cancellation::wait_for_pending_at_least(backend, 2));
+    REQUIRE(backend.run_one());
+    REQUIRE(deterministic_controlled_cancellation::wait_for_pending_at_least(backend, 1));
+    runner.request_stop();
+    if (backend.pending() > 0) {
+        REQUIRE(backend.run_one());
+    }
+    while (backend.run_one()) {}
+
+    REQUIRE(fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    auto result = fut.get();
+    REQUIRE(result.has_value());
+    REQUIRE(!result->failed());
+    REQUIRE(ran_a.load() == 1);
+    REQUIRE(ran_b.load() == 0);
+    REQUIRE(ran_c.load() <= 1);
+}
+
+TEST_CASE("Deterministic cancellation after Quorum<1> resolution", "[pravaha][runner][cancellation][controlled][deterministic]") {
+    deterministic_controlled_cancellation::ControlledBackend backend;
+    deterministic_controlled_cancellation::ObservedRunner runner(backend);
+    TestObserver::reset();
+
+    std::atomic<int> ran_a{0};
+    std::atomic<int> ran_b{0};
+    std::atomic<int> ran_c{0};
+
+    auto expr = pravaha::quorum<1>(
+        pravaha::task("A_success", [&]() { ran_a.fetch_add(1); })
+        &
+        pravaha::task("B_slow", [&]() { ran_b.fetch_add(1); })
+    ) | pravaha::task("C", [&]() { ran_c.fetch_add(1); });
+
+    auto fut = std::async(std::launch::async, [&]() mutable {
+        return runner.submit(std::move(expr));
+    });
+
+    REQUIRE(deterministic_controlled_cancellation::wait_for_pending_at_least(backend, 2));
+    REQUIRE(backend.run_one());
+    REQUIRE(deterministic_controlled_cancellation::wait_for_pending_at_least(backend, 1));
+    runner.request_stop();
+    if (backend.pending() > 0) {
+        REQUIRE(backend.run_one());
+    }
+    while (backend.run_one()) {}
+
+    REQUIRE(fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    auto result = fut.get();
+    REQUIRE(result.has_value());
+    REQUIRE(!result->failed());
+    REQUIRE(ran_a.load() == 1);
+    REQUIRE(ran_b.load() == 0);
+    REQUIRE(ran_c.load() <= 1);
 }
 
